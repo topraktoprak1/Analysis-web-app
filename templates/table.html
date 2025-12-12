@@ -1,0 +1,981 @@
+<!DOCTYPE html>
+<html data-bs-theme="light" lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, shrink-to-fit=no">
+    <title>Pivot Analysis - Veri Analizı</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='bootstrap/css/bootstrap.min.css') }}">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Nunito:200,200i,300,300i,400,400i,600,600i,700,700i,800,800i,900,900i&display=swap">
+    <link rel="stylesheet" href="{{ url_for('static', filename='fonts/fontawesome-all.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/bss-overrides.css') }}">
+</head>
+<body id="page-top">
+    <div id="wrapper">
+        <nav class="navbar align-items-start p-0 sidebar sidebar-dark accordion bg-gradient-primary navbar-dark">
+            <div class="container-fluid d-flex flex-column p-0">
+                <a class="navbar-brand d-flex justify-content-center align-items-center m-0 sidebar-brand" href="#">
+                    <div class="sidebar-brand-icon rotate-n-15"><i class="fas fa-chart-line"></i></div>
+                    <div class="mx-3 sidebar-brand-text"><span>Veri Analizı</span></div>
+                </a>
+                <hr class="my-0 sidebar-divider">
+                <ul class="navbar-nav text-light" id="accordionSidebar">
+                    <li class="nav-item"><a class="nav-link" href="/index.html"><i class="fas fa-database"></i><span>Database View</span></a></li>
+                    <li class="nav-item"><a class="nav-link active" href="/table.html"><i class="fas fa-table"></i><span>Pivot Analysis</span></a></li>
+                    <li class="nav-item"><a class="nav-link" href="/graphs.html"><i class="fas fa-chart-line"></i><span>Graph Analysis</span></a></li>
+                    {% if role == 'admin' %}
+                    <li class="nav-item"><a class="nav-link" href="/admin.html"><i class="fas fa-cog"></i><span>Admin Panel</span></a></li>
+                    {% endif %}
+                    <li class="nav-item"><a class="nav-link" href="/profile.html"><i class="fas fa-user"></i><span>Profile</span></a></li>
+                </ul>
+                <div class="text-center d-none d-md-inline">
+                    <button class="btn rounded-circle border-0" id="sidebarToggle" type="button"></button>
+                </div>
+            </div>
+        </nav>
+        
+        <div class="d-flex flex-column" id="content-wrapper">
+            <div id="content">
+                <nav class="navbar navbar-expand bg-white shadow mb-4 topbar">
+                    <div class="container-fluid">
+                        <button class="btn btn-link d-md-none me-3 rounded-circle" id="sidebarToggleTop" type="button">
+                            <i class="fas fa-bars"></i>
+                        </button>
+                        <h4 class="mb-0">📐 Staff Pivot Analysis</h4>
+                        <ul class="navbar-nav flex-nowrap ms-auto">
+                            <li class="nav-item dropdown no-arrow">
+                                <a class="dropdown-toggle nav-link" aria-expanded="false" data-bs-toggle="dropdown" href="#">
+                                    <img class="border rounded-circle me-2" id="navProfilePhoto" src="{{ url_for('static', filename='img/avatars/avatar1.jpeg') }}" style="width: 32px; height: 32px;">
+                                    <span class="d-none d-lg-inline me-2 text-gray-600 small">{{ name or user }}</span>
+                                </a>
+                                <div class="dropdown-menu shadow dropdown-menu-end animated--grow-in">
+                                    <a class="dropdown-item" href="/profile.html">
+                                        <i class="fas fa-user fa-sm fa-fw me-2 text-gray-400"></i> Profile
+                                    </a>
+                                    <div class="dropdown-divider"></div>
+                                    <a class="dropdown-item" href="#" onclick="logout()">
+                                        <i class="fas fa-sign-out-alt fa-sm fa-fw me-2 text-gray-400"></i> Logout
+                                    </a>
+                                </div>
+                            </li>
+                        </ul>
+                    </div>
+                </nav>
+                
+                <div class="container-fluid">
+                    <!-- Alert Container -->
+                    <div id="alertContainer"></div>
+                    
+                    <!-- Database Preview Section -->
+                    <div class="card shadow mb-4" id="dataPreview" style="display: none;">
+                        <div class="card-header py-3">
+                            <h6 class="m-0 font-weight-bold text-primary">📋 DATABASE Preview (First 5 Rows)</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="alert alert-info">
+                                <i class="fas fa-info-circle"></i> Showing first 5 rows from your uploaded file. Use filters and pivot below to analyze.
+                            </div>
+                            <div class="mb-3">
+                                <input type="text" id="searchInput" class="form-control" placeholder="🔍 Search in table...">
+                            </div>
+                            <div id="dataTable" style="overflow-x: auto; max-height: 400px;"></div>
+                        </div>
+                    </div>
+                    
+                    <!-- Info Message -->
+                    <div class="alert alert-info" id="uploadNotice">
+                        <i class="fas fa-info-circle"></i> Please upload a file on the <a href="/index.html" class="alert-link">Database View</a> page first to see pivot analysis.
+                    </div>
+                    
+                    <!-- Pivot Configuration -->
+                    <div class="card shadow mb-4" id="pivotConfig" style="display: none;">
+                        <div class="card-header py-3">
+                            <h6 class="m-0 font-weight-bold text-primary">📐 Create Pivot Table</h6>
+                        </div>
+                        <div class="card-body">
+                            <!-- Collapsible Filters Section -->
+                            <div class="accordion mb-3" id="filterAccordion">
+                                <div class="accordion-item">
+                                    <h2 class="accordion-header" id="filterHeading">
+                                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#filterCollapse" aria-expanded="false" aria-controls="filterCollapse">
+                                            <i class="fas fa-filter me-2"></i> Filters (Optional - Click to expand)
+                                        </button>
+                                    </h2>
+                                    <div id="filterCollapse" class="accordion-collapse collapse" aria-labelledby="filterHeading" data-bs-parent="#filterAccordion">
+                                        <div class="accordion-body">
+                                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                                <small class="text-muted">Select which data to include in your pivot table</small>
+                                                <div class="btn-group">
+                                                    <button class="btn btn-sm btn-outline-secondary" onclick="clearAllFilters()">
+                                                        <i class="fas fa-times"></i> Clear All Filters
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <!-- Filter Save/Load Section -->
+                                            <div class="row g-2 mb-3">
+                                                <div class="col-md-4">
+                                                    <label class="form-label fw-bold"><i class="fas fa-save"></i> Save Current Filters</label>
+                                                    <div class="input-group input-group-sm">
+                                                        <input type="text" class="form-control" id="saveFilterName" placeholder="Enter filter name">
+                                                        <button class="btn btn-success" onclick="saveCurrentFilter()">
+                                                            <i class="fas fa-save"></i> Save
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-4">
+                                                    <label class="form-label fw-bold"><i class="fas fa-folder-open"></i> Load Saved Filter</label>
+                                                    <select class="form-select form-select-sm" id="savedFiltersSelect" onchange="loadSelectedFilter()">
+                                                        <option value="">-- Select a saved filter --</option>
+                                                    </select>
+                                                </div>
+                                                <div class="col-md-4">
+                                                    <label class="form-label fw-bold">&nbsp;</label>
+                                                    <div>
+                                                        <button class="btn btn-sm btn-danger" onclick="deleteSelectedFilter()" id="deleteFilterBtn" disabled>
+                                                            <i class="fas fa-trash"></i> Delete Filter
+                                                        </button>
+                                                        <button class="btn btn-sm btn-info" onclick="refreshSavedFilters()">
+                                                            <i class="fas fa-sync"></i> Refresh List
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <hr>
+                                            <div id="filtersContainer" class="row g-3"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="row g-3 mb-3">
+                                <div class="col-md-3">
+                                    <label class="form-label fw-bold">Group By (Rows)</label>
+                                    <select class="form-select" id="pivotIndex">
+                                        <option value="">-- Select Column --</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label fw-bold">Columns (Optional)</label>
+                                    <select class="form-select" id="pivotColumns">
+                                        <option value="">-- None --</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label fw-bold">Values to Analyze</label>
+                                    <div id="pivotValues" class="border rounded p-2" style="max-height: 200px; overflow-y: auto;">
+                                        <small class="text-muted">Loading columns...</small>
+                                    </div>
+                                    <small class="text-muted">Select one or more values</small>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label fw-bold">Calculation Method</label>
+                                    <select class="form-select" id="pivotAggFunc">
+                                        <option value="sum">Sum (Total)</option>
+                                        <option value="mean">Mean (Average)</option>
+                                        <option value="count">Count</option>
+                                        <option value="min">Minimum</option>
+                                        <option value="max">Maximum</option>
+                                    </select>
+                                </div>
+                            </div>
+                            
+                            <div class="row g-2 mb-3">
+                                <div class="col-auto">
+                                    <button class="btn btn-primary" onclick="createPivotTable()">
+                                        <i class="fas fa-table"></i> Create Pivot Table
+                                    </button>
+                                </div>
+                                <div class="col-auto">
+                                    <button class="btn btn-secondary" onclick="resetPivot()">
+                                        <i class="fas fa-redo"></i> Reset
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <!-- Quick Analysis Buttons -->
+                            <div class="border-top pt-3">
+                                <h6 class="text-muted">Quick Analysis Templates:</h6>
+                                <div class="btn-group flex-wrap" role="group">
+                                    <button class="btn btn-outline-primary btn-sm" onclick="quickPivot('staff')">
+                                        <i class="fas fa-user"></i> By Staff
+                                    </button>
+                                    <button class="btn btn-outline-success btn-sm" onclick="quickPivot('department')">
+                                        <i class="fas fa-building"></i> By Department
+                                    </button>
+                                    <button class="btn btn-outline-info btn-sm" onclick="quickPivot('week')">
+                                        <i class="fas fa-calendar-week"></i> By Week
+                                    </button>
+                                    <button class="btn btn-outline-warning btn-sm" onclick="quickPivot('month')">
+                                        <i class="fas fa-calendar"></i> By Month
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Pivot Results -->
+                    <div class="card shadow mb-4" id="pivotResults" style="display: none;">
+                        <div class="card-header py-3 d-flex justify-content-between align-items-center">
+                            <h6 class="m-0 font-weight-bold text-primary">📊 Pivot Table Results</h6>
+                            <div class="btn-group" role="group">
+                                <button class="btn btn-sm btn-success" onclick="exportPivot('excel')">
+                                    <i class="fas fa-file-excel"></i> Export to Excel
+                                </button>
+                                <button class="btn btn-sm btn-primary" onclick="exportPivot('word')">
+                                    <i class="fas fa-file-word"></i> Export to Word
+                                </button>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <div id="pivotTable"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <footer class="bg-white sticky-footer">
+                <div class="container my-auto">
+                    <div class="text-center my-auto copyright">
+                        <span>Copyright © Veri Analizı 2025</span>
+                    </div>
+                </div>
+            </footer>
+        </div>
+    </div>
+    
+    <!-- Loading Toast -->
+    <div class="toast-container position-fixed bottom-0 end-0 p-3">
+        <div id="loadingToast" class="toast" role="alert">
+            <div class="toast-header">
+                <strong class="me-auto">Processing...</strong>
+                <button type="button" class="btn-close" data-bs-dismiss="toast"></button>
+            </div>
+            <div class="toast-body">Loading...</div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='bootstrap/js/bootstrap.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    
+    <script>
+        // Pivot table specific variables
+        let currentFilters = {};
+        let filterColumns = [];
+        
+        // Utility functions for this page
+        function showLoading(message = 'Loading...') {
+            const toast = document.getElementById('loadingToast');
+            if (toast) {
+                toast.querySelector('.toast-body').textContent = message;
+                const bsToast = new bootstrap.Toast(toast);
+                bsToast.show();
+            }
+        }
+
+        function hideLoading() {
+            const toast = document.getElementById('loadingToast');
+            if (toast) {
+                const bsToast = bootstrap.Toast.getInstance(toast);
+                if (bsToast) bsToast.hide();
+            }
+        }
+
+        function showSuccess(message) {
+            showAlert(message, 'success');
+        }
+
+        function showError(message) {
+            showAlert(message, 'danger');
+        }
+
+        function showAlert(message, type) {
+            const alertContainer = document.getElementById('alertContainer');
+            if (!alertContainer) {
+                console.error('Alert container not found');
+                return;
+            }
+            
+            const alert = document.createElement('div');
+            alert.className = `alert alert-${type} alert-dismissible fade show`;
+            alert.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            
+            alertContainer.appendChild(alert);
+            
+            setTimeout(() => {
+                alert.remove();
+            }, 5000);
+        }
+        
+        async function exportReport(format) {
+            showLoading('Generating pivot report...');
+            
+            try {
+                // Get the last pivot configuration from sessionStorage
+                const lastPivotConfig = sessionStorage.getItem('lastPivotConfig');
+                
+                if (!lastPivotConfig) {
+                    showError('Please create a pivot table first before exporting');
+                    hideLoading();
+                    return;
+                }
+                
+                const pivotConfig = JSON.parse(lastPivotConfig);
+                
+                const response = await fetch('/api/export-pivot', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        format: format,
+                        filters: currentFilters || {},
+                        pivot_config: pivotConfig
+                    })
+                });
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `pivot_table_${new Date().getTime()}.${format === 'word' ? 'docx' : 'xlsx'}`;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                    showSuccess('Pivot table exported successfully!');
+                } else {
+                    const result = await response.json();
+                    showError(result.error || 'Export failed');
+                }
+            } catch (error) {
+                showError('Error exporting: ' + error.message);
+            } finally {
+                hideLoading();
+            }
+        }
+        
+        // Check if data is loaded
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Pivot table page loaded, checking data...');
+            checkDataLoaded();
+        });
+        
+        function checkDataLoaded() {
+            console.log('Fetching session data...');
+            // Try to fetch current session data
+            fetch('/api/check-session')
+                .then(response => {
+                    console.log('Response status:', response.status);
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('Session data:', data);
+                    if (data.hasData) {
+                        document.getElementById('uploadNotice').style.display = 'none';
+                        document.getElementById('pivotConfig').style.display = 'block';
+                        
+                        // Show database preview
+                        document.getElementById('dataPreview').style.display = 'block';
+                        displayData(data.data);
+                        
+                        // Show filters if available
+                        if (data.filter_columns && data.filter_columns.length > 0) {
+                            filterColumns = data.filter_columns;
+                            allDataFromServer = data.filter_columns;  // Store original data
+                            populateFilters(data.filter_columns);
+                        }
+                        
+                        populateSelects(data.columns);
+                        
+                        // Add search functionality
+                        const searchInput = document.getElementById('searchInput');
+                        if (searchInput) {
+                            searchInput.addEventListener('input', function(e) {
+                                const searchTerm = e.target.value.toLowerCase();
+                                const rows = document.querySelectorAll('#dataTable table tbody tr');
+                                rows.forEach(row => {
+                                    const text = row.textContent.toLowerCase();
+                                    row.style.display = text.includes(searchTerm) ? '' : 'none';
+                                });
+                            });
+                        }
+                    } else {
+                        console.log('No data available');
+                    }
+                })
+                .catch(err => {
+                    console.error('Error checking session:', err);
+                    showError('Error loading data: ' + err.message);
+                });
+        }
+        
+        let allDataFromServer = [];  // Store all data for cascading filters
+        
+        function populateFilters(filterCols) {
+            const container = document.getElementById('filtersContainer');
+            container.innerHTML = '';
+            
+            console.log('Populating filters with', filterCols.length, 'columns');
+            
+            // Initialize currentFilters with all values (since all checkboxes start as checked)
+            currentFilters = {};
+            
+            filterCols.forEach((col, colIndex) => {
+                const colDiv = document.createElement('div');
+                colDiv.className = 'col-md-3';
+                
+                // Initialize filter with all values
+                currentFilters[col.name] = [...col.values];
+                
+                let html = `
+                    <div class="card border-primary">
+                        <div class="card-header bg-primary text-white py-2">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <small class="fw-bold">${col.name}</small>
+                                <button class="btn btn-sm btn-light" onclick="toggleAllInFilter('${col.name}')" style="padding: 2px 8px;">
+                                    <i class="fas fa-check-double"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="card-body p-2" style="max-height: 250px; overflow-y: auto;" id="filter_body_${col.name.replace(/[^a-zA-Z0-9]/g, '_')}">
+                `;
+                
+                col.values.forEach((value, idx) => {
+                    const safeId = `filter_${col.name.replace(/[^a-zA-Z0-9]/g, '_')}_${idx}`;
+                    html += `
+                        <div class="form-check">
+                            <input class="form-check-input filter-checkbox" type="checkbox" value="${value}" 
+                                   id="${safeId}" data-column="${col.name}" checked 
+                                   onchange="onFilterChange('${col.name}')">
+                            <label class="form-check-label small" for="${safeId}" title="${value}">
+                                ${value}
+                            </label>
+                        </div>
+                    `;
+                });
+                
+                html += `
+                        </div>
+                        <div class="card-footer py-1 bg-light">
+                            <small class="text-muted">
+                                <span id="count_${col.name.replace(/[^a-zA-Z0-9]/g, '_')}">${col.values.length}</span> / ${col.values.length} selected
+                            </small>
+                        </div>
+                    </div>
+                `;
+                
+                colDiv.innerHTML = html;
+                container.appendChild(colDiv);
+            });
+            
+            console.log('Filters initialized:', currentFilters);
+            console.log('Total filter categories:', Object.keys(currentFilters).length);
+        }
+        
+        function toggleAllInFilter(columnName) {
+            const checkboxes = document.querySelectorAll(`input[data-column="${columnName}"]`);
+            const anyUnchecked = Array.from(checkboxes).some(cb => !cb.checked && !cb.disabled);
+            
+            checkboxes.forEach(cb => {
+                if (!cb.disabled) {
+                    cb.checked = anyUnchecked;
+                }
+            });
+            
+            updateFilterCount(columnName);
+            onFilterChange(columnName);
+        }
+        
+        function updateFilterCount(columnName) {
+            const checkboxes = document.querySelectorAll(`input[data-column="${columnName}"]`);
+            const checkedCount = Array.from(checkboxes).filter(cb => cb.checked && !cb.disabled).length;
+            const countElement = document.getElementById(`count_${columnName.replace(/[^a-zA-Z0-9]/g, '_')}`);
+            if (countElement) {
+                countElement.textContent = checkedCount;
+            }
+        }
+        
+        async function onFilterChange(changedColumn) {
+            // Update count for the changed column
+            if (changedColumn) {
+                updateFilterCount(changedColumn);
+                console.log('Filter changed for column:', changedColumn);
+            }
+            
+            // Collect current filter selections
+            currentFilters = {};
+            const checkboxes = document.querySelectorAll('.filter-checkbox:checked:not(:disabled)');
+            
+            console.log('Total checkboxes found:', document.querySelectorAll('.filter-checkbox').length);
+            console.log('Checked checkboxes:', checkboxes.length);
+            
+            checkboxes.forEach(cb => {
+                const column = cb.getAttribute('data-column');
+                if (!currentFilters[column]) {
+                    currentFilters[column] = [];
+                }
+                currentFilters[column].push(cb.value);
+            });
+            
+            console.log('=== FILTER CHANGE DEBUG ===');
+            console.log('Changed column:', changedColumn);
+            console.log('Current filters after update:', currentFilters);
+            console.log('Filter categories:', Object.keys(currentFilters).length);
+            Object.keys(currentFilters).forEach(key => {
+                console.log(`  ${key}: ${currentFilters[key].length} values`);
+            });
+            console.log('========================');
+            
+            // Apply cascading filter - fetch updated filter options from server
+            try {
+                const response = await fetch('/api/get-filtered-options', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        filters: currentFilters
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    // Update available options for each filter (cascading)
+                    updateCascadingFilters(result.filter_columns);
+                }
+            } catch (error) {
+                console.error('Error updating filters:', error);
+            }
+        }
+        
+        function updateCascadingFilters(newFilterColumns) {
+            newFilterColumns.forEach(col => {
+                const availableValues = new Set(col.values);
+                const checkboxes = document.querySelectorAll(`input[data-column="${col.name}"]`);
+                
+                checkboxes.forEach(cb => {
+                    const value = cb.value;
+                    const parentDiv = cb.closest('.form-check');
+                    
+                    if (availableValues.has(value)) {
+                        // Value is available - enable and show
+                        cb.disabled = false;
+                        parentDiv.style.display = '';
+                        parentDiv.style.opacity = '1';
+                    } else {
+                        // Value is not available - disable and dim
+                        cb.disabled = true;
+                        cb.checked = false;
+                        parentDiv.style.opacity = '0.4';
+                    }
+                });
+                
+                updateFilterCount(col.name);
+            });
+        }
+        
+        function clearAllFilters() {
+            const checkboxes = document.querySelectorAll('.filter-checkbox');
+            checkboxes.forEach(cb => {
+                cb.checked = true;
+                cb.disabled = false;
+                const parentDiv = cb.closest('.form-check');
+                parentDiv.style.display = '';
+                parentDiv.style.opacity = '1';
+            });
+            
+            currentFilters = {};
+            
+            // Update all counts
+            filterColumns.forEach(col => {
+                updateFilterCount(col.name);
+            });
+            
+            // Reset cascading filters by fetching all options
+            onFilterChange(null);
+            
+            showSuccess('All filters cleared!');
+        }
+        
+        function displayData(data) {
+            if (!data || data.length === 0) return;
+
+            const columns = Object.keys(data[0]);
+            let html = '<table class="table table-bordered table-hover table-sm">';
+            html += '<thead class="table-dark"><tr>';
+            columns.forEach(col => {
+                html += `<th class="small">${col}</th>`;
+            });
+            html += '</tr></thead><tbody>';
+            
+            data.forEach(row => {
+                html += '<tr>';
+                columns.forEach(col => {
+                    html += `<td class="small">${row[col] || ''}</td>`;
+                });
+                html += '</tr>';
+            });
+            
+            html += '</tbody></table>';
+            document.getElementById('dataTable').innerHTML = html;
+        }
+        
+        function populateSelects(columns) {
+            // Populate Index dropdown
+            const indexSelect = document.getElementById('pivotIndex');
+            const currentIndex = indexSelect.value;
+            indexSelect.innerHTML = '';
+            columns.forEach(col => {
+                const option = document.createElement('option');
+                option.value = col;
+                option.textContent = col;
+                indexSelect.appendChild(option);
+            });
+            if (currentIndex) indexSelect.value = currentIndex;
+            
+            // Populate Columns dropdown
+            const columnsSelect = document.getElementById('pivotColumns');
+            const currentColumns = columnsSelect.value;
+            columnsSelect.innerHTML = '<option value="">-- None --</option>';
+            columns.forEach(col => {
+                const option = document.createElement('option');
+                option.value = col;
+                option.textContent = col;
+                columnsSelect.appendChild(option);
+            });
+            if (currentColumns) columnsSelect.value = currentColumns;
+            
+            // Populate Values as checkboxes
+            const valuesContainer = document.getElementById('pivotValues');
+            valuesContainer.innerHTML = '';
+            console.log('Populating values with', columns.length, 'columns');
+            columns.forEach((col, idx) => {
+                const div = document.createElement('div');
+                div.className = 'form-check';
+                
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.className = 'form-check-input value-checkbox';
+                checkbox.id = `valueCheck_${idx}`;
+                checkbox.value = col;
+                
+                const label = document.createElement('label');
+                label.className = 'form-check-label';
+                label.htmlFor = `valueCheck_${idx}`;
+                label.textContent = col;
+                
+                div.appendChild(checkbox);
+                div.appendChild(label);
+                valuesContainer.appendChild(div);
+            });
+            console.log('Values checkboxes created:', document.querySelectorAll('.value-checkbox').length);
+        }
+        
+        async function createPivotTable() {
+            const index = document.getElementById('pivotIndex').value;
+            const columns = document.getElementById('pivotColumns').value;
+            
+            // Get selected values from checkboxes
+            const valueCheckboxes = document.querySelectorAll('.value-checkbox:checked');
+            const values = Array.from(valueCheckboxes).map(cb => cb.value);
+            
+            const aggFunc = document.getElementById('pivotAggFunc').value;
+            
+            if (!index || values.length === 0) {
+                showError('Please select Group By column and at least one Value');
+                return;
+            }
+            
+            console.log('=== PIVOT CREATION DEBUG ===');
+            console.log('Index:', index);
+            console.log('Columns:', columns);
+            console.log('Values:', values);
+            console.log('Agg Function:', aggFunc);
+            console.log('Current Filters:', currentFilters);
+            console.log('Filter Keys:', Object.keys(currentFilters));
+            console.log('Total filters applied:', Object.keys(currentFilters).length);
+            Object.keys(currentFilters).forEach(key => {
+                console.log(`  ${key}: ${currentFilters[key].length} values selected`);
+            });
+            console.log('=========================');
+            
+            showLoading('Creating pivot table...');
+            
+            try {
+                const response = await fetch('/api/pivot', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        index, 
+                        columns: columns || null, 
+                        values, 
+                        agg_func: aggFunc,
+                        filters: currentFilters || {}
+                    })
+                });
+                
+                const result = await response.json();
+                console.log('Pivot response:', result);
+                
+                if (result.success) {
+                    displayPivotTable(result.data, result.columns);
+                    document.getElementById('pivotResults').style.display = 'block';
+                    showSuccess('Pivot table created successfully!');
+                    
+                    // Save pivot configuration to sessionStorage for export
+                    const pivotConfig = {
+                        index, 
+                        columns: columns || null, 
+                        values, 
+                        agg_func: aggFunc
+                    };
+                    sessionStorage.setItem('lastPivotConfig', JSON.stringify(pivotConfig));
+                } else {
+                    showError(result.error || 'Failed to create pivot table');
+                }
+            } catch (error) {
+                console.error('Pivot error:', error);
+                showError('Error creating pivot: ' + error.message);
+            } finally {
+                hideLoading();
+            }
+        }
+        
+        function displayPivotTable(data, columns) {
+            const container = document.getElementById('pivotTable');
+            if (!data || data.length === 0) {
+                container.innerHTML = '<p class="text-muted">No data to display</p>';
+                return;
+            }
+            
+            let html = '<div class="table-responsive"><table class="table table-bordered table-hover table-striped">';
+            html += '<thead class="table-primary"><tr>';
+            columns.forEach(col => html += `<th class="fw-bold">${col}</th>`);
+            html += '</tr></thead><tbody>';
+            
+            data.forEach(row => {
+                html += '<tr>';
+                columns.forEach(col => {
+                    const value = row[col];
+                    const displayValue = typeof value === 'number' ? value.toLocaleString() : (value || '');
+                    html += `<td>${displayValue}</td>`;
+                });
+                html += '</tr>';
+            });
+            
+            html += '</tbody></table></div>';
+            container.innerHTML = html;
+        }
+        
+        function resetPivot() {
+            document.getElementById('pivotIndex').selectedIndex = 0;
+            document.getElementById('pivotColumns').selectedIndex = 0;
+            document.getElementById('pivotValues').selectedIndex = -1;
+            document.getElementById('pivotAggFunc').value = 'sum';
+            document.getElementById('pivotResults').style.display = 'none';
+        }
+        
+        function quickPivot(type) {
+            const columns = Array.from(document.getElementById('pivotIndex').options).map(opt => opt.value).filter(v => v);
+            
+            let indexCol = '';
+            let valuesCol = [];
+            
+            if (type === 'staff') {
+                indexCol = columns.find(c => c.toLowerCase().includes('name') && c.toLowerCase().includes('surname')) || columns[0];
+                valuesCol = columns.filter(c => c.includes('USD') || c.includes('KAR/ZARAR'));
+            } else if (type === 'department') {
+                indexCol = columns.find(c => c.toLowerCase().includes('department') || c.toLowerCase().includes('dept')) || columns[0];
+                valuesCol = columns.filter(c => c.includes('USD'));
+            } else if (type === 'week' || type === 'month') {
+                indexCol = columns.find(c => c.toLowerCase().includes('week') || c.toLowerCase().includes('month')) || columns[0];
+                valuesCol = columns.filter(c => c.includes('USD'));
+            }
+            
+            if (indexCol) document.getElementById('pivotIndex').value = indexCol;
+            if (valuesCol.length > 0) {
+                const select = document.getElementById('pivotValues');
+                Array.from(select.options).forEach(opt => {
+                    opt.selected = valuesCol.includes(opt.value);
+                });
+            }
+            
+            createPivotTable();
+        }
+        
+        function exportPivot(format) {
+            exportReport(format);
+        }
+        
+        async function logout() {
+            try {
+                await fetch('/api/logout', {method: 'POST'});
+                window.location.href = '/login.html';
+            } catch (error) {
+                console.error('Logout error:', error);
+                window.location.href = '/login.html';
+            }
+        }
+        
+        // ========== FILTER SAVE/LOAD FUNCTIONS ==========
+        
+        async function saveCurrentFilter() {
+            const filterName = document.getElementById('saveFilterName').value.trim();
+            if (!filterName) {
+                showAlert('Please enter a name for the filter', 'warning');
+                return;
+            }
+            
+            // Get current pivot configuration
+            const filterConfig = {
+                filters: currentFilters,
+                index: document.getElementById('pivotIndex').value,
+                columns: document.getElementById('pivotColumns').value,
+                values: Array.from(document.querySelectorAll('#pivotValues option:checked')).map(opt => opt.value),
+                agg_func: document.getElementById('pivotAggFunc').value
+            };
+            
+            try {
+                const response = await fetch('/api/save-filter', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        filter_name: filterName,
+                        filter_type: 'pivot',
+                        filter_config: filterConfig
+                    })
+                });
+                
+                const result = await response.json();
+                if (response.ok) {
+                    showAlert(result.message || 'Filter saved successfully!', 'success');
+                    document.getElementById('saveFilterName').value = '';
+                    await refreshSavedFilters();
+                } else {
+                    showAlert(result.error || 'Failed to save filter', 'danger');
+                }
+            } catch (error) {
+                console.error('Error saving filter:', error);
+                showAlert('Error saving filter: ' + error.message, 'danger');
+            }
+        }
+        
+        async function refreshSavedFilters() {
+            try {
+                const response = await fetch('/api/load-filters?filter_type=pivot');
+                const result = await response.json();
+                
+                if (response.ok && result.filters) {
+                    const select = document.getElementById('savedFiltersSelect');
+                    select.innerHTML = '<option value="">-- Select a saved filter --</option>';
+                    
+                    result.filters.forEach(filter => {
+                        const option = document.createElement('option');
+                        option.value = filter.id;
+                        option.textContent = `${filter.filter_name} (${new Date(filter.updated_at).toLocaleDateString()})`;
+                        option.dataset.config = JSON.stringify(filter.filter_config);
+                        select.appendChild(option);
+                    });
+                    
+                    document.getElementById('deleteFilterBtn').disabled = true;
+                } else {
+                    console.error('Failed to load filters:', result.error);
+                }
+            } catch (error) {
+                console.error('Error loading filters:', error);
+            }
+        }
+        
+        function loadSelectedFilter() {
+            const select = document.getElementById('savedFiltersSelect');
+            const deleteBtn = document.getElementById('deleteFilterBtn');
+            
+            if (select.value) {
+                deleteBtn.disabled = false;
+                const selectedOption = select.options[select.selectedIndex];
+                const config = JSON.parse(selectedOption.dataset.config);
+                
+                // Apply the saved configuration
+                if (config.filters) {
+                    currentFilters = config.filters;
+                    applyFiltersToCheckboxes(config.filters);
+                }
+                
+                if (config.index) {
+                    document.getElementById('pivotIndex').value = config.index;
+                }
+                
+                if (config.columns) {
+                    document.getElementById('pivotColumns').value = config.columns;
+                }
+                
+                if (config.values && Array.isArray(config.values)) {
+                    const valuesSelect = document.getElementById('pivotValues');
+                    Array.from(valuesSelect.options).forEach(opt => {
+                        opt.selected = config.values.includes(opt.value);
+                    });
+                }
+                
+                if (config.agg_func) {
+                    document.getElementById('pivotAggFunc').value = config.agg_func;
+                }
+                
+                showAlert('Filter loaded successfully!', 'success');
+            } else {
+                deleteBtn.disabled = true;
+            }
+        }
+        
+        function applyFiltersToCheckboxes(filters) {
+            // First uncheck all
+            document.querySelectorAll('.filter-checkbox').forEach(cb => cb.checked = false);
+            
+            // Then check only the ones in the filter
+            Object.keys(filters).forEach(column => {
+                filters[column].forEach(value => {
+                    const checkbox = document.querySelector(`.filter-checkbox[data-column="${column}"][value="${value}"]`);
+                    if (checkbox) {
+                        checkbox.checked = true;
+                    }
+                });
+                updateFilterCount(column);
+            });
+        }
+        
+        async function deleteSelectedFilter() {
+            const select = document.getElementById('savedFiltersSelect');
+            if (!select.value) {
+                showAlert('Please select a filter to delete', 'warning');
+                return;
+            }
+            
+            if (!confirm('Are you sure you want to delete this filter?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/delete-filter/${select.value}`, {
+                    method: 'DELETE'
+                });
+                
+                const result = await response.json();
+                if (response.ok) {
+                    showAlert(result.message || 'Filter deleted successfully!', 'success');
+                    await refreshSavedFilters();
+                } else {
+                    showAlert(result.error || 'Failed to delete filter', 'danger');
+                }
+            } catch (error) {
+                console.error('Error deleting filter:', error);
+                showAlert('Error deleting filter: ' + error.message, 'danger');
+            }
+        }
+        
+        // Load saved filters on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            setTimeout(refreshSavedFilters, 1000); // Wait for page to fully load
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,896 @@
+<!DOCTYPE html>
+<html data-bs-theme="light" lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, shrink-to-fit=no">
+    <title>Graph Analysis - Veri Analizı</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='bootstrap/css/bootstrap.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='fonts/fontawesome-all.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/bss-overrides.css') }}">
+    <style>
+        /* Fullscreen chart styling */
+        [id^="chartWrapper_"]:fullscreen {
+            background: white;
+            padding: 20px;
+            display: flex !important;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        [id^="chartWrapper_"]:fullscreen .card {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+        
+        [id^="chartWrapper_"]:fullscreen .card-body {
+            height: calc(100% - 50px);
+            display: flex;
+            flex-direction: column;
+        }
+        
+        [id^="chartWrapper_"]:fullscreen [id^="chart_"] {
+            flex: 1;
+            min-height: unset !important;
+            height: 100% !important;
+        }
+        
+        /* Loading spinner - ensure it's visible but gets removed */
+        .spinner-border {
+            width: 3rem;
+            height: 3rem;
+        }
+    </style>
+</head>
+
+<body id="page-top">
+    <div id="wrapper">
+        <!-- Sidebar -->
+        <nav class="navbar align-items-start sidebar sidebar-dark accordion bg-gradient-primary p-0 navbar-dark">
+            <div class="container-fluid d-flex flex-column p-0">
+                <a class="navbar-brand d-flex justify-content-center align-items-center sidebar-brand m-0" href="#">
+                    <div class="sidebar-brand-icon rotate-n-15"><i class="fas fa-chart-line"></i></div>
+                    <div class="sidebar-brand-text mx-3"><span>Veri Analizı</span></div>
+                </a>
+                <hr class="sidebar-divider my-0">
+                <ul class="navbar-nav text-light" id="accordionSidebar">
+                    <li class="nav-item">
+                        <a class="nav-link" href="/index.html">
+                            <i class="fas fa-database"></i><span> Database View</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/table.html">
+                            <i class="fas fa-table"></i><span> Pivot Analysis</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link active" href="/graphs.html">
+                            <i class="fas fa-chart-bar"></i><span> Graph Analysis</span>
+                        </a>
+                    </li>
+                    {% if role == 'admin' %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="/admin.html">
+                            <i class="fas fa-cog"></i><span> Admin Panel</span>
+                        </a>
+                    </li>
+                    {% endif %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="/profile.html">
+                            <i class="fas fa-user"></i><span> Profile</span>
+                        </a>
+                    </li>
+                </ul>
+                <div class="text-center d-none d-md-inline">
+                    <button class="btn rounded-circle border-0" id="sidebarToggle" type="button"></button>
+                </div>
+            </div>
+        </nav>
+        
+        <!-- Main Content -->
+        <div class="d-flex flex-column" id="content-wrapper">
+            <div id="content">
+                <!-- Topbar -->
+                <nav class="navbar navbar-expand bg-white shadow mb-4 topbar static-top navbar-light">
+                    <div class="container-fluid">
+                        <button class="btn btn-link d-md-none rounded-circle me-3" id="sidebarToggleTop" type="button">
+                            <i class="fas fa-bars"></i>
+                        </button>
+                        <h3 class="text-dark mb-0">📊 Graph Analysis</h3>
+                        <ul class="navbar-nav flex-nowrap ms-auto">
+                            <li class="nav-item dropdown no-arrow">
+                                <a class="dropdown-toggle nav-link" aria-expanded="false" data-bs-toggle="dropdown" href="#">
+                                    <img class="border rounded-circle me-2" id="navProfilePhoto" src="{{ url_for('static', filename='img/avatars/avatar1.jpeg') }}" style="width: 32px; height: 32px;">
+                                    <span class="d-none d-lg-inline me-2 text-gray-600 small">{{ name or user }}</span>
+                                </a>
+                                <div class="dropdown-menu shadow dropdown-menu-end animated--grow-in">
+                                    <a class="dropdown-item" href="/profile.html">
+                                        <i class="fas fa-user fa-sm fa-fw me-2 text-gray-400"></i> Profile
+                                    </a>
+                                    <div class="dropdown-divider"></div>
+                                    <a class="dropdown-item" href="#" onclick="logout()">
+                                        <i class="fas fa-sign-out-alt fa-sm fa-fw me-2 text-gray-400"></i> Logout
+                                    </a>
+                                </div>
+                            </li>
+                        </ul>
+                    </div>
+                </nav>
+                
+                <!-- Page Content -->
+                <div class="container-fluid">
+                    <!-- Alert Container -->
+                    <div id="alertContainer"></div>
+                    
+                    <!-- Active Filters Indicator -->
+                    <div class="alert alert-success d-none" id="activeFiltersAlert">
+                        <i class="fas fa-filter"></i> <strong>Active Filters:</strong> 
+                        <span id="filterSummary"></span>
+                        <a href="/index.html" class="alert-link ms-2">Edit Filters</a>
+                        <button class="btn btn-sm btn-outline-success ms-2" onclick="clearAllFilters()">
+                            <i class="fas fa-times"></i> Clear All Filters
+                        </button>
+                    </div>
+                    
+                    <!-- Filter Save/Load Section -->
+                    <div class="card shadow mb-4" id="filterManagementCard" style="display: none;">
+                        <div class="card-header py-3">
+                            <h6 class="m-0 font-weight-bold text-primary"><i class="fas fa-bookmark"></i> Manage Chart Configurations</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="row g-2">
+                                <div class="col-md-4">
+                                    <label class="form-label fw-bold"><i class="fas fa-save"></i> Save Current Configuration</label>
+                                    <div class="input-group input-group-sm">
+                                        <input type="text" class="form-control" id="saveGraphFilterName" placeholder="Enter configuration name">
+                                        <button class="btn btn-success" onclick="saveCurrentGraphConfig()">
+                                            <i class="fas fa-save"></i> Save
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label fw-bold"><i class="fas fa-folder-open"></i> Load Saved Configuration</label>
+                                    <select class="form-select form-select-sm" id="savedGraphFiltersSelect" onchange="loadSelectedGraphConfig()">
+                                        <option value="">-- Select a saved configuration --</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label fw-bold">&nbsp;</label>
+                                    <div>
+                                        <button class="btn btn-sm btn-danger" onclick="deleteSelectedGraphConfig()" id="deleteGraphFilterBtn" disabled>
+                                            <i class="fas fa-trash"></i> Delete
+                                        </button>
+                                        <button class="btn btn-sm btn-info" onclick="refreshSavedGraphConfigs()">
+                                            <i class="fas fa-sync"></i> Refresh
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Info Message -->
+                    <div class="alert alert-info" id="uploadNotice">
+                        <i class="fas fa-info-circle"></i> Please upload a file on the <a href="/index.html" class="alert-link">Database View</a> page first to see graph analysis.
+                    </div>
+                    
+                    <!-- Number of Charts Selection -->
+                    <div class="card shadow mb-4" id="chartCountCard" style="display: none;">
+                        <div class="card-header py-3">
+                            <h6 class="m-0 font-weight-bold text-primary">📈 Chart Configuration</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="row align-items-end">
+                                <div class="col-md-3">
+                                    <label class="form-label fw-bold">Number of Charts</label>
+                                    <select class="form-select" id="chartCount" onchange="createChartConfigs()">
+                                        <option value="1">1 Chart</option>
+                                        <option value="2" selected>2 Charts</option>
+                                        <option value="3">3 Charts</option>
+                                        <option value="4">4 Charts</option>
+                                        <option value="6">6 Charts</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <button class="btn btn-primary" onclick="generateAllCharts()">
+                                        <i class="fas fa-chart-line"></i> Generate All Charts
+                                    </button>
+                                    <button class="btn btn-secondary" onclick="clearAllCharts()">
+                                        <i class="fas fa-eraser"></i> Clear All
+                                    </button>
+                                </div>
+                                <div class="col-md-3 text-end">
+                                    <div class="btn-group" role="group">
+                                        <button class="btn btn-success" onclick="exportCharts('excel')">
+                                            <i class="fas fa-file-excel"></i> Export to Excel
+                                        </button>
+                                        <button class="btn btn-primary" onclick="exportCharts('word')">
+                                            <i class="fas fa-file-word"></i> Export to Word
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Individual Chart Configurations -->
+                    <div class="row" id="chartConfigsContainer">
+                    </div>
+                    
+                    <!-- Charts Display -->
+                    <div class="row" id="chartsContainer">
+                    </div>
+                </div>
+            </div>
+            
+            <footer class="bg-white sticky-footer">
+                <div class="container my-auto">
+                    <div class="text-center my-auto copyright">
+                        <span>Copyright © Veri Analizı 2025</span>
+                    </div>
+                </div>
+            </footer>
+        </div>
+    </div>
+    
+    <!-- Loading Toast -->
+    <div class="toast-container position-fixed bottom-0 end-0 p-3">
+        <div id="loadingToast" class="toast" role="alert">
+            <div class="toast-header">
+                <strong class="me-auto">Processing...</strong>
+                <button type="button" class="btn-close" data-bs-dismiss="toast"></button>
+            </div>
+            <div class="toast-body">Loading...</div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='bootstrap/js/bootstrap.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    
+    <script>
+        let currentData = null;
+        let currentColumns = [];
+        
+        // Check if data is loaded on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            checkDataLoaded();
+            displayActiveFilters();
+        });
+        
+        function displayActiveFilters() {
+            const storedFilters = sessionStorage.getItem('activeFilters');
+            if (storedFilters) {
+                const filters = JSON.parse(storedFilters);
+                const filterCount = Object.keys(filters).length;
+                
+                if (filterCount > 0) {
+                    let summary = '';
+                    let totalItems = 0;
+                    for (const [column, values] of Object.entries(filters)) {
+                        totalItems += values.length;
+                    }
+                    summary = `${filterCount} column(s) filtered (${totalItems} total selections)`;
+                    
+                    document.getElementById('filterSummary').textContent = summary;
+                    document.getElementById('activeFiltersAlert').classList.remove('d-none');
+                }
+            }
+        }
+        
+        function clearAllFilters() {
+            sessionStorage.removeItem('activeFilters');
+            showAlert('Filters cleared. Refresh page or regenerate charts to see all data.', 'info');
+            document.getElementById('activeFiltersAlert').classList.add('d-none');
+        }
+        
+        async function checkDataLoaded() {
+            try {
+                const response = await fetch('/api/check-session');
+                const result = await response.json();
+                
+                if (result.hasData) {
+                    document.getElementById('uploadNotice').style.display = 'none';
+                    document.getElementById('chartCountCard').style.display = 'block';
+                    
+                    currentData = result.data;
+                    currentColumns = result.columns;
+                    
+                    // Create default 2 chart configs
+                    createChartConfigs();
+                }
+            } catch (error) {
+                console.error('Error checking session:', error);
+            }
+        }
+        
+        function createChartConfigs() {
+            const chartCount = parseInt(document.getElementById('chartCount').value);
+            const configContainer = document.getElementById('chartConfigsContainer');
+            const chartsContainer = document.getElementById('chartsContainer');
+            
+            configContainer.innerHTML = '';
+            chartsContainer.innerHTML = '';
+            
+            // Determine column class for layout
+            const colClass = chartCount === 1 ? 'col-12' : 
+                            chartCount === 2 ? 'col-lg-6' :
+                            chartCount === 3 ? 'col-lg-4' :
+                            chartCount === 4 ? 'col-lg-6' :
+                            'col-lg-4';
+            
+            // Create config cards for each chart
+            for (let i = 0; i < chartCount; i++) {
+                const configCard = document.createElement('div');
+                configCard.className = `${colClass} mb-4`;
+                configCard.innerHTML = `
+                    <div class="card shadow h-100">
+                        <div class="card-header py-2">
+                            <h6 class="m-0 font-weight-bold text-primary">Chart ${i + 1}</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="mb-2">
+                                <label class="form-label small fw-bold">Select Visualization Type</label>
+                                <select class="form-select form-select-sm" id="chartType_${i}" onchange="updateChartLabels(${i})">
+                                    <option value="line">Line Chart</option>
+                                    <option value="bar">Bar Chart</option>
+                                    <option value="scatter">Scatter Plot</option>
+                                    <option value="pie">Pie Chart</option>
+                                    <option value="box">Box Plot</option>
+                                    <option value="histogram">Histogram</option>
+                                </select>
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label small fw-bold" id="chartXLabel_${i}">X-axis</label>
+                                <select class="form-select form-select-sm" id="chartX_${i}">
+                                    <option value="">Select column...</option>
+                                </select>
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label small fw-bold" id="chartYLabel_${i}">Y-axis</label>
+                                <select class="form-select form-select-sm" id="chartY_${i}">
+                                    <option value="">Select column...</option>
+                                </select>
+                            </div>
+                            <div class="mb-2" id="chartColorDiv_${i}">
+                                <label class="form-label small fw-bold">Color by</label>
+                                <select class="form-select form-select-sm" id="chartColor_${i}">
+                                    <option value="">None</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                configContainer.appendChild(configCard);
+                
+                // Populate dropdowns
+                setTimeout(() => populateChartSelects(i), 10);
+                
+                // Create chart display placeholder
+                const chartDiv = document.createElement('div');
+                chartDiv.className = `${colClass} mb-4`;
+                chartDiv.id = `chartWrapper_${i}`;
+                chartDiv.style.display = 'none';
+                chartDiv.innerHTML = `
+                    <div class="card shadow">
+                        <div class="card-header d-flex justify-content-between align-items-center py-2">
+                            <h6 class="m-0 font-weight-bold text-primary">Chart ${i + 1}</h6>
+                            <button class="btn btn-sm btn-outline-primary" onclick="toggleFullscreen(${i})" title="Fullscreen">
+                                <i class="fas fa-expand"></i>
+                            </button>
+                        </div>
+                        <div class="card-body">
+                            <div id="chart_${i}" style="min-height: 400px;"></div>
+                        </div>
+                    </div>
+                `;
+                chartsContainer.appendChild(chartDiv);
+            }
+        }
+        
+        function updateChartLabels(chartIndex) {
+            const chartType = document.getElementById(`chartType_${chartIndex}`).value;
+            const xLabel = document.getElementById(`chartXLabel_${chartIndex}`);
+            const yLabel = document.getElementById(`chartYLabel_${chartIndex}`);
+            const colorDiv = document.getElementById(`chartColorDiv_${chartIndex}`);
+            
+            if (chartType === 'pie') {
+                // Pie chart: Labels (categories) and Values (sizes)
+                xLabel.textContent = 'Labels (Categories)';
+                yLabel.textContent = 'Values (Sizes)';
+                colorDiv.style.display = 'none'; // Hide color option for pie charts
+            } else if (chartType === 'histogram') {
+                // Histogram: only needs one column
+                xLabel.textContent = 'Column to analyze';
+                yLabel.textContent = 'Frequency (auto)';
+                colorDiv.style.display = 'block';
+            } else {
+                // Other charts: Standard X-axis and Y-axis
+                xLabel.textContent = 'X-axis';
+                yLabel.textContent = 'Y-axis';
+                colorDiv.style.display = 'block';
+            }
+        }
+        
+        function populateChartSelects(chartIndex) {
+            const xSelect = document.getElementById(`chartX_${chartIndex}`);
+            const ySelect = document.getElementById(`chartY_${chartIndex}`);
+            const colorSelect = document.getElementById(`chartColor_${chartIndex}`);
+            
+            if (!xSelect || !ySelect || !colorSelect) return;
+            
+            currentColumns.forEach(col => {
+                xSelect.innerHTML += `<option value="${col}">${col}</option>`;
+                ySelect.innerHTML += `<option value="${col}">${col}</option>`;
+                colorSelect.innerHTML += `<option value="${col}">${col}</option>`;
+            });
+            
+            // Set smart defaults
+            if (chartIndex === 0) {
+                // Chart 1: Line chart defaults
+                document.getElementById(`chartType_${chartIndex}`).value = 'line';
+                if (currentColumns.includes('Week / Month') || currentColumns.includes('(Week / Month)')) {
+                    xSelect.value = currentColumns.find(c => c.includes('Week') && c.includes('Month'));
+                }
+                if (currentColumns.includes('KAR/ZARAR')) {
+                    ySelect.value = 'KAR/ZARAR';
+                }
+                if (currentColumns.includes('Discipline')) {
+                    colorSelect.value = 'Discipline';
+                }
+            } else if (chartIndex === 1) {
+                // Chart 2: Bar chart defaults
+                document.getElementById(`chartType_${chartIndex}`).value = 'bar';
+                if (currentColumns.includes('Discipline')) {
+                    xSelect.value = 'Discipline';
+                }
+                if (currentColumns.includes('KAR/ZARAR')) {
+                    ySelect.value = 'KAR/ZARAR';
+                }
+            }
+            
+            // Update labels based on chart type
+            updateChartLabels(chartIndex);
+        }
+        
+        async function generateAllCharts() {
+            const chartCount = parseInt(document.getElementById('chartCount').value);
+            const button = event.target;
+            button.disabled = true;
+            button.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Generating...';
+            
+            // Generate all charts in parallel for better performance
+            const promises = [];
+            for (let i = 0; i < chartCount; i++) {
+                promises.push(generateSingleChart(i));
+            }
+            
+            const results = await Promise.all(promises);
+            const successCount = results.filter(r => r).length;
+            
+            button.disabled = false;
+            button.innerHTML = '<i class="fas fa-chart-line me-2"></i>Generate All Charts';
+            
+            if (successCount > 0) {
+                showAlert(`Generated ${successCount} of ${chartCount} charts successfully`, 'success');
+                
+                // Save chart configurations to sessionStorage for export
+                const chartConfigs = [];
+                for (let i = 0; i < chartCount; i++) {
+                    const chartType = document.getElementById(`chartType_${i}`)?.value;
+                    const xColumn = document.getElementById(`chartX_${i}`)?.value;
+                    const yColumn = document.getElementById(`chartY_${i}`)?.value;
+                    const colorColumn = document.getElementById(`chartColor_${i}`)?.value;
+                    
+                    if (chartType && xColumn && yColumn) {
+                        chartConfigs.push({
+                            chart_type: chartType,
+                            x_column: xColumn,
+                            y_column: yColumn,
+                            color_column: colorColumn || null
+                        });
+                    }
+                }
+                sessionStorage.setItem('lastChartConfigs', JSON.stringify(chartConfigs));
+            } else {
+                showAlert('Failed to generate charts. Please check your selections.', 'danger');
+            }
+        }
+        
+        async function generateSingleChart(chartIndex) {
+            const chartType = document.getElementById(`chartType_${chartIndex}`).value;
+            const xColumn = document.getElementById(`chartX_${chartIndex}`).value;
+            const yColumn = document.getElementById(`chartY_${chartIndex}`).value;
+            const colorColumn = document.getElementById(`chartColor_${chartIndex}`).value;
+            
+            if (!xColumn || !yColumn) {
+                return false;
+            }
+            
+            // Get active filters from sessionStorage
+            const storedFilters = sessionStorage.getItem('activeFilters');
+            const filters = storedFilters ? JSON.parse(storedFilters) : null;
+            
+            // Show loading indicator
+            const chartDiv = document.getElementById(`chart_${chartIndex}`);
+            chartDiv.innerHTML = '<div class="text-center p-4"><div class="spinner-border text-primary"></div><p class="mt-2">Loading chart...</p></div>';
+            document.getElementById(`chartWrapper_${chartIndex}`).style.display = 'block';
+            
+            try {
+                const requestBody = {
+                    chart_type: chartType,
+                    x_column: xColumn,
+                    y_column: yColumn,
+                    color_column: colorColumn || null
+                };
+                
+                // Include filters if they exist
+                if (filters && Object.keys(filters).length > 0) {
+                    requestBody.filters = filters;
+                }
+                
+                const response = await fetch('/api/chart', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    credentials: 'same-origin',
+                    body: JSON.stringify(requestBody)
+                });
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`HTTP ${response.status}: ${errorText}`);
+                }
+                
+                const result = await response.json();
+                console.log('Chart API response:', result);
+                
+                if (result.success && result.chart) {
+                    const chartData = JSON.parse(result.chart);
+                    console.log('Chart data parsed:', chartData);
+                    // Expose last chart for debugging in console
+                    window.lastChartData = chartData;
+                    window.lastChartIndex = chartIndex;
+                    
+                    // Update chart title
+                    let title = `${yColumn} over ${xColumn}`;
+                    if (colorColumn) {
+                        title = `${yColumn} by ${colorColumn}`;
+                    }
+                    chartData.layout.title = title;
+                    chartData.layout.height = 400;
+                    
+                    // Clear loading indicator first
+                    chartDiv.innerHTML = '';
+                    
+                    // Show and plot chart
+                    document.getElementById(`chartWrapper_${chartIndex}`).style.display = 'block';
+                    Plotly.newPlot(`chart_${chartIndex}`, chartData.data, chartData.layout, {
+                        responsive: true,
+                        displayModeBar: true,
+                        modeBarButtonsToAdd: ['toggleSpikelines'],
+                        modeBarButtonsToRemove: ['lasso2d', 'select2d']
+                    });
+                    console.log(`Chart ${chartIndex} rendered successfully`);
+                    return true;
+                } else {
+                    const errorMsg = result.error || 'Unknown error occurred';
+                    console.error('Chart generation failed:', errorMsg);
+                    document.getElementById(`chart_${chartIndex}`).innerHTML = 
+                        `<div class="alert alert-danger"><strong>Error:</strong> ${errorMsg}</div>`;
+                    return false;
+                }
+            } catch (error) {
+                console.error(`Error creating chart ${chartIndex}:`, error);
+                document.getElementById(`chart_${chartIndex}`).innerHTML = 
+                    `<div class="alert alert-danger"><strong>Error:</strong> ${error.message}<br><small>Check browser console for details</small></div>`;
+                return false;
+            }
+        }
+        
+        function clearAllCharts() {
+            const chartCount = parseInt(document.getElementById('chartCount').value);
+            for (let i = 0; i < chartCount; i++) {
+                const wrapper = document.getElementById(`chartWrapper_${i}`);
+                if (wrapper) {
+                    wrapper.style.display = 'none';
+                    document.getElementById(`chart_${i}`).innerHTML = '';
+                }
+            }
+        }
+        
+        function toggleFullscreen(chartIndex) {
+            const chartWrapper = document.getElementById(`chartWrapper_${chartIndex}`);
+            const chartDiv = document.getElementById(`chart_${chartIndex}`);
+            
+            if (!document.fullscreenElement) {
+                // Enter fullscreen
+                if (chartWrapper.requestFullscreen) {
+                    chartWrapper.requestFullscreen();
+                } else if (chartWrapper.webkitRequestFullscreen) {
+                    chartWrapper.webkitRequestFullscreen();
+                } else if (chartWrapper.msRequestFullscreen) {
+                    chartWrapper.msRequestFullscreen();
+                }
+                
+                // Resize chart after entering fullscreen
+                setTimeout(() => {
+                    Plotly.Plots.resize(chartDiv);
+                }, 100);
+                
+                // Listen for fullscreen exit to resize back
+                document.addEventListener('fullscreenchange', () => {
+                    if (!document.fullscreenElement) {
+                        setTimeout(() => {
+                            Plotly.Plots.resize(chartDiv);
+                        }, 100);
+                    }
+                }, {once: true});
+            } else {
+                // Exit fullscreen
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                } else if (document.webkitExitFullscreen) {
+                    document.webkitExitFullscreen();
+                } else if (document.msExitFullscreen) {
+                    document.msExitFullscreen();
+                }
+            }
+        }
+        
+        async function exportCharts(format) {
+            // Get saved chart configurations from sessionStorage
+            const chartConfigsStr = sessionStorage.getItem('lastChartConfigs');
+            
+            if (!chartConfigsStr) {
+                showAlert('Please generate charts first before exporting', 'warning');
+                return;
+            }
+            
+            const chartConfigs = JSON.parse(chartConfigsStr);
+            
+            if (chartConfigs.length === 0) {
+                showAlert('No charts to export', 'warning');
+                return;
+            }
+            
+            showAlert('Generating charts report...', 'info');
+            
+            try {
+                // Get current filters from sessionStorage
+                let currentFilters = {};
+                const filtersStr = sessionStorage.getItem('currentFilters');
+                if (filtersStr) {
+                    currentFilters = JSON.parse(filtersStr);
+                }
+                
+                const response = await fetch('/api/export-charts', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        format: format,
+                        filters: currentFilters,
+                        chart_configs: chartConfigs
+                    })
+                });
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `charts_${new Date().getTime()}.${format === 'word' ? 'docx' : 'xlsx'}`;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                    showAlert('Charts exported successfully!', 'success');
+                } else {
+                    const result = await response.json();
+                    showAlert(result.error || 'Export failed', 'danger');
+                }
+            } catch (error) {
+                showAlert('Error exporting charts: ' + error.message, 'danger');
+            }
+        }
+        
+        function showAlert(message, type) {
+            const alertHtml = `
+                <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+                    ${message}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+            `;
+            document.getElementById('alertContainer').innerHTML = alertHtml;
+            setTimeout(() => {
+                document.getElementById('alertContainer').innerHTML = '';
+            }, 5000);
+        }
+        
+        async function logout() {
+            try {
+                await fetch('/api/logout', {method: 'POST'});
+                window.location.href = '/login.html';
+            } catch (error) {
+                console.error('Logout error:', error);
+                window.location.href = '/login.html';
+            }
+        }
+        
+        // ========== GRAPH CONFIGURATION SAVE/LOAD FUNCTIONS ==========
+        
+        async function saveCurrentGraphConfig() {
+            const filterName = document.getElementById('saveGraphFilterName').value.trim();
+            if (!filterName) {
+                showAlert('Please enter a name for the configuration', 'warning');
+                return;
+            }
+            
+            // Get current chart configurations
+            const chartCount = parseInt(document.getElementById('chartCount').value);
+            const chartConfigs = [];
+            
+            for (let i = 0; i < chartCount; i++) {
+                const config = {
+                    chart_type: document.getElementById(`chartType_${i}`).value,
+                    x_column: document.getElementById(`chartX_${i}`).value,
+                    y_column: document.getElementById(`chartY_${i}`).value,
+                    color_column: document.getElementById(`chartColor_${i}`) ? document.getElementById(`chartColor_${i}`).value : ''
+                };
+                chartConfigs.push(config);
+            }
+            
+            // Get current filters from sessionStorage
+            let currentFilters = {};
+            const filtersStr = sessionStorage.getItem('currentFilters');
+            if (filtersStr) {
+                currentFilters = JSON.parse(filtersStr);
+            }
+            
+            const filterConfig = {
+                chart_count: chartCount,
+                chart_configs: chartConfigs,
+                filters: currentFilters
+            };
+            
+            try {
+                const response = await fetch('/api/save-filter', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        filter_name: filterName,
+                        filter_type: 'graph',
+                        filter_config: filterConfig
+                    })
+                });
+                
+                const result = await response.json();
+                if (response.ok) {
+                    showAlert(result.message || 'Configuration saved successfully!', 'success');
+                    document.getElementById('saveGraphFilterName').value = '';
+                    await refreshSavedGraphConfigs();
+                } else {
+                    showAlert(result.error || 'Failed to save configuration', 'danger');
+                }
+            } catch (error) {
+                console.error('Error saving configuration:', error);
+                showAlert('Error saving configuration: ' + error.message, 'danger');
+            }
+        }
+        
+        async function refreshSavedGraphConfigs() {
+            try {
+                const response = await fetch('/api/load-filters?filter_type=graph');
+                const result = await response.json();
+                
+                if (response.ok && result.filters) {
+                    const select = document.getElementById('savedGraphFiltersSelect');
+                    select.innerHTML = '<option value="">-- Select a saved configuration --</option>';
+                    
+                    result.filters.forEach(filter => {
+                        const option = document.createElement('option');
+                        option.value = filter.id;
+                        option.textContent = `${filter.filter_name} (${new Date(filter.updated_at).toLocaleDateString()})`;
+                        option.dataset.config = JSON.stringify(filter.filter_config);
+                        select.appendChild(option);
+                    });
+                    
+                    document.getElementById('deleteGraphFilterBtn').disabled = true;
+                } else {
+                    console.error('Failed to load configurations:', result.error);
+                }
+            } catch (error) {
+                console.error('Error loading configurations:', error);
+            }
+        }
+        
+        function loadSelectedGraphConfig() {
+            const select = document.getElementById('savedGraphFiltersSelect');
+            const deleteBtn = document.getElementById('deleteGraphFilterBtn');
+            
+            if (select.value) {
+                deleteBtn.disabled = false;
+                const selectedOption = select.options[select.selectedIndex];
+                const config = JSON.parse(selectedOption.dataset.config);
+                
+                // Apply chart count
+                if (config.chart_count) {
+                    document.getElementById('chartCount').value = config.chart_count;
+                    createChartConfigs();
+                }
+                
+                // Wait a moment for DOM to update
+                setTimeout(() => {
+                    // Apply chart configurations
+                    if (config.chart_configs && Array.isArray(config.chart_configs)) {
+                        config.chart_configs.forEach((chartCfg, i) => {
+                            if (document.getElementById(`chartType_${i}`)) {
+                                document.getElementById(`chartType_${i}`).value = chartCfg.chart_type || 'bar';
+                                document.getElementById(`chartX_${i}`).value = chartCfg.x_column || '';
+                                document.getElementById(`chartY_${i}`).value = chartCfg.y_column || '';
+                                if (document.getElementById(`chartColor_${i}`) && chartCfg.color_column) {
+                                    document.getElementById(`chartColor_${i}`).value = chartCfg.color_column;
+                                }
+                                updateChartLabels(i);
+                            }
+                        });
+                    }
+                    
+                    // Apply filters to sessionStorage
+                    if (config.filters) {
+                        sessionStorage.setItem('currentFilters', JSON.stringify(config.filters));
+                        displayActiveFilters();
+                    }
+                    
+                    showAlert('Configuration loaded successfully! Click "Generate All Charts" to apply.', 'success');
+                }, 100);
+            } else {
+                deleteBtn.disabled = true;
+            }
+        }
+        
+        async function deleteSelectedGraphConfig() {
+            const select = document.getElementById('savedGraphFiltersSelect');
+            if (!select.value) {
+                showAlert('Please select a configuration to delete', 'warning');
+                return;
+            }
+            
+            if (!confirm('Are you sure you want to delete this configuration?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/delete-filter/${select.value}`, {
+                    method: 'DELETE'
+                });
+                
+                const result = await response.json();
+                if (response.ok) {
+                    showAlert(result.message || 'Configuration deleted successfully!', 'success');
+                    await refreshSavedGraphConfigs();
+                } else {
+                    showAlert(result.error || 'Failed to delete configuration', 'danger');
+                }
+            } catch (error) {
+                console.error('Error deleting configuration:', error);
+                showAlert('Error deleting configuration: ' + error.message, 'danger');
+            }
+        }
+        
+        // Show filter management card when charts are available
+        const originalCheckSession = checkSession;
+        async function checkSession() {
+            await originalCheckSession();
+            const chartCountCard = document.getElementById('chartCountCard');
+            const filterManagementCard = document.getElementById('filterManagementCard');
+            if (chartCountCard && chartCountCard.style.display !== 'none') {
+                filterManagementCard.style.display = 'block';
+                refreshSavedGraphConfigs();
+            }
+        }
+    </script>
+</body>
+
+</html>

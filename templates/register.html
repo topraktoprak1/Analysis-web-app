@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html data-bs-theme="light" lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, shrink-to-fit=no">
+    <title>Register - Brand</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='bootstrap/css/bootstrap.min.css') }}">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Nunito:200,200i,300,300i,400,400i,600,600i,700,700i,800,800i,900,900i&amp;display=swap">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/bss-overrides.css') }}">
+</head>
+
+<body class="bg-gradient-primary">
+    <div class="container">
+        <div class="card shadow-lg my-5 o-hidden border-0">
+            <div class="card-body p-0">
+                <div class="row">
+                    <div class="col-lg-11">
+                        <div class="p-5">
+                            <div class="text-center">
+                                <h4 class="text-dark mb-4">Create an Account!</h4>
+                            </div>
+                            <div id="alertContainer"></div>
+                            <form class="user" id="registerForm">
+                                <div class="mb-3">
+                                    <input class="form-control form-control-user" type="text" id="name" placeholder="Full Name (must match PERSONEL name in database)" name="name" required>
+                                    <small class="text-muted">This name must exactly match your name in the DATABASE PERSONEL column</small>
+                                </div>
+                                <div class="mb-3">
+                                    <input class="form-control form-control-user" type="text" id="username" placeholder="Username" name="username" required>
+                                </div>
+                                <div class="mb-3">
+                                    <input class="form-control form-control-user" type="password" id="password" placeholder="Password" name="password" required>
+                                </div>
+                                <div class="mb-3">
+                                    <input class="form-control form-control-user" type="password" id="confirmPassword" placeholder="Confirm Password" name="confirmPassword" required>
+                                </div>
+                                <button class="btn btn-primary d-block w-100 btn-user" type="submit">Register Account</button>
+                                <hr>
+                            </form>
+                            <div class="text-center"><a class="small" href="login.html">Already have an account? Login!</a></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="{{ url_for('static', filename='bootstrap/js/bootstrap.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/bs-init.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script>
+        document.getElementById('registerForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const name = document.getElementById('name').value;
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const confirmPassword = document.getElementById('confirmPassword').value;
+            
+            if (password !== confirmPassword) {
+                showAlert('Passwords do not match', 'danger');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/register', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({name, username, password})
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    showAlert('Registration successful! Redirecting to login...', 'success');
+                    setTimeout(() => {
+                        window.location.href = '/login.html';
+                    }, 2000);
+                } else {
+                    showAlert(result.error || 'Registration failed', 'danger');
+                }
+            } catch (error) {
+                showAlert('Error: ' + error.message, 'danger');
+            }
+        });
+        
+        function showAlert(message, type) {
+            const alertHtml = `
+                <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+                    ${message}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+            `;
+            document.getElementById('alertContainer').innerHTML = alertHtml;
+        }
+    </script>
+</body>
+
+</html>

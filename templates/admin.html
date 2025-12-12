@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html data-bs-theme="light" lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, shrink-to-fit=no">
+    <title>Admin Panel - Veri Analizı</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='bootstrap/css/bootstrap.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='fonts/fontawesome-all.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/bss-overrides.css') }}">
+</head>
+
+<body id="page-top">
+    <div id="wrapper">
+        <!-- Sidebar -->
+        <nav class="navbar align-items-start sidebar sidebar-dark accordion bg-gradient-primary p-0 navbar-dark">
+            <div class="container-fluid d-flex flex-column p-0">
+                <a class="navbar-brand d-flex justify-content-center align-items-center sidebar-brand m-0" href="#">
+                    <div class="sidebar-brand-icon rotate-n-15"><i class="fas fa-chart-line"></i></div>
+                    <div class="sidebar-brand-text mx-3"><span>Veri Analizı</span></div>
+                </a>
+                <hr class="my-0 sidebar-divider">
+                <ul class="navbar-nav text-light" id="accordionSidebar">
+                    <li class="nav-item"><a class="nav-link" href="/index.html"><i class="fas fa-database"></i><span>Database View</span></a></li>
+                    <li class="nav-item"><a class="nav-link" href="/table.html"><i class="fas fa-table"></i><span>Pivot Analysis</span></a></li>
+                    <li class="nav-item"><a class="nav-link" href="/graphs.html"><i class="fas fa-chart-line"></i><span>Graph Analysis</span></a></li>
+                    <li class="nav-item"><a class="nav-link active" href="/admin.html"><i class="fas fa-cog"></i><span>Admin Panel</span></a></li>
+                    <li class="nav-item"><a class="nav-link" href="/profile.html"><i class="fas fa-user"></i><span>Profile</span></a></li>
+                </ul>
+                <div class="text-center d-none d-md-inline">
+                    <button class="btn rounded-circle border-0" id="sidebarToggle" type="button"></button>
+                </div>
+            </div>
+        </nav>
+        
+        <!-- Main Content -->
+        <div class="d-flex flex-column" id="content-wrapper">
+            <div id="content">
+                <!-- Topbar -->
+                <nav class="navbar navbar-expand bg-white shadow mb-4 topbar static-top navbar-light">
+                    <div class="container-fluid">
+                        <button class="btn btn-link d-md-none rounded-circle me-3" id="sidebarToggleTop" type="button">
+                            <i class="fas fa-bars"></i>
+                        </button>
+                        <h3 class="text-dark mb-0">⚙️ Admin Panel</h3>
+                        <ul class="navbar-nav flex-nowrap ms-auto">
+                            <li class="nav-item dropdown no-arrow">
+                                <a class="dropdown-toggle nav-link" aria-expanded="false" data-bs-toggle="dropdown" href="#">
+                                    <img class="border rounded-circle me-2" id="navProfilePhoto" src="{{ url_for('static', filename='img/avatars/avatar1.jpeg') }}" style="width: 32px; height: 32px;">
+                                    <span class="d-none d-lg-inline me-2 text-gray-600 small">{{ name or user }}</span>
+                                </a>
+                                <div class="dropdown-menu shadow dropdown-menu-end animated--grow-in">
+                                    <a class="dropdown-item" href="/profile.html">
+                                        <i class="fas fa-user fa-sm fa-fw me-2 text-gray-400"></i> Profile
+                                    </a>
+                                    <div class="dropdown-divider"></div>
+                                    <a class="dropdown-item" href="#" onclick="logout()">
+                                        <i class="fas fa-sign-out-alt fa-sm fa-fw me-2 text-gray-400"></i> Logout
+                                    </a>
+                                </div>
+                            </li>
+                        </ul>
+                    </div>
+                </nav>
+                
+                <!-- Page Content -->
+                <div class="container-fluid">
+                    <!-- Alert Container -->
+                    <div id="alertContainer"></div>
+                    
+                    <!-- Excel Upload Section -->
+                    <div class="card shadow mb-4">
+                        <div class="card-header py-3">
+                            <h6 class="m-0 font-weight-bold text-primary">📁 Upload Excel Database</h6>
+                        </div>
+                        <div class="card-body">
+                            <input type="file" id="fileInput" accept=".xlsx,.xls,.xlsb" style="display: none;">
+                            <div class="d-flex gap-2 align-items-center">
+                                <button class="btn btn-primary" id="uploadBtn" onclick="document.getElementById('fileInput').click()">
+                                    <i class="fas fa-upload"></i> Choose Excel File
+                                </button>
+                                <button class="btn btn-danger" id="clearDbBtn" onclick="clearDatabase()">
+                                    <i class="fas fa-trash"></i> Clear Database
+                                </button>
+                                <span id="dbRecordCount" class="badge bg-secondary"></span>
+                            </div>
+                            <p class="mt-2 text-muted">Upload Excel file to import database records (Supports .xlsx, .xls, .xlsb - Max 50MB)</p>
+                            <p class="text-muted small"><strong>Note:</strong> Uploading a new file will ADD records to the existing database. Use "Clear Database" to remove old data first.</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Data Preview Section -->
+                    <div class="card shadow mb-4" id="dataPreviewCard" style="display: none;">
+                        <div class="card-header py-3 d-flex justify-content-between align-items-center">
+                            <h6 class="m-0 font-weight-bold text-primary">📊 Current Database Preview</h6>
+                            <span id="dataStats" class="badge bg-info"></span>
+                        </div>
+                        <div class="card-body">
+                            <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                                <table class="table table-bordered table-hover" id="previewTable">
+                                    <thead class="table-light" style="position: sticky; top: 0; z-index: 10;">
+                                        <tr id="previewHeaders"></tr>
+                                    </thead>
+                                    <tbody id="previewBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Add New Record -->
+                    <div class="card shadow mb-4">
+                        <div class="card-header py-3">
+                            <h6 class="m-0 font-weight-bold text-primary">➕ Add New Record</h6>
+                            <small class="text-muted">Calculated fields (Currency, Hourly Rate, Cost, KAR/ZARAR, etc.) will be automatically computed</small>
+                        </div>
+                        <div class="card-body">
+                            <div id="formLoadingMsg">
+                                <div class="text-center p-4">
+                                    <div class="spinner-border text-primary" role="status">
+                                        <span class="visually-hidden">Loading...</span>
+                                    </div>
+                                    <p class="mt-2">Loading form fields...</p>
+                                </div>
+                            </div>
+                            <form id="addRecordForm" style="display:none;">
+                                <div class="row g-3" id="formFieldsContainer">
+                                    <!-- Fields will be dynamically generated -->
+                                </div>
+                                <div class="row g-3 mt-2">
+                                    <div class="col-12">
+                                        <button type="submit" class="btn btn-primary">
+                                            <i class="fas fa-plus"></i> Add Record
+                                        </button>
+                                        <button type="reset" class="btn btn-secondary">
+                                            <i class="fas fa-undo"></i> Reset
+                                        </button>
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                    
+                    <!-- Database Records -->
+                    <div class="card shadow mb-4">
+                        <div class="card-header py-3 d-flex justify-content-between">
+                            <div class="d-flex align-items-center">
+                                <h6 class="m-0 font-weight-bold text-primary me-3">📋 Database Records</h6>
+                                <div class="input-group input-group-sm" style="width:320px;">
+                                    <input id="recordsSearch" type="search" class="form-control" placeholder="Search names..." aria-label="Search names">
+                                    <button id="clearSearch" class="btn btn-outline-secondary" type="button" title="Clear">×</button>
+                                </div>
+                            </div>
+                            <div>
+                                <button class="btn btn-sm btn-info" onclick="loadRecords()">
+                                    <i class="fas fa-sync"></i> Refresh
+                                </button>
+                            </div>
+                        </div>
+                        <div class="card-body" >
+                            <div id="recordsContainer">
+                                <p class="text-muted">Loading records...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <footer class="bg-white sticky-footer">
+                <div class="container my-auto">
+                    <div class="text-center my-auto copyright">
+                        <span>Copyright © Veri Analizı 2025</span>
+                    </div>
+                </div>
+            </footer>
+        </div>
+    </div>
+    
+    <!-- View Record Modal -->
+    <div class="modal fade" id="viewRecordModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Record Details</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body" id="recordDetailsBody">
+                    <p class="text-muted">Loading...</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='bootstrap/js/bootstrap.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    
+    <script>
+        let inputFields = [];
+        let calculatedFields = [];
+        
+        // Load input fields and generate form
+        async function loadFormFields() {
+            try {
+                const response = await fetch('/api/get-input-fields');
+                const result = await response.json();
+                
+                if (result.success) {
+                    inputFields = result.input_fields;
+                    calculatedFields = result.calculated_fields;
+                    generateFormFields();
+                } else {
+                    document.getElementById('formLoadingMsg').innerHTML = 
+                        '<div class="alert alert-warning">Could not load form fields. Using default fields.</div>';
+                    generateDefaultForm();
+                }
+            } catch (error) {
+                console.error('Error loading form fields:', error);
+                document.getElementById('formLoadingMsg').innerHTML = 
+                    '<div class="alert alert-danger">Error loading form fields: ' + error.message + '</div>';
+            }
+        }
+        
+        function generateFormFields() {
+            const container = document.getElementById('formFieldsContainer');
+            const form = document.getElementById('addRecordForm');
+            const loadingMsg = document.getElementById('formLoadingMsg');
+            
+            // Priority fields that should come first
+            const priorityFields = ['Name Surname', 'PERSONEL', 'Emp No', '(Week / Month)', 'Week / Month', 
+                                    'Status', 'Office Location', 'Total Hours', 'TOTAL MH', 'Huzey MH', 
+                                    'Company', 'Projects', 'Projects/Group', 'Discipline', 'Scope'];
+            
+            // Separate priority and other fields
+            const priority = inputFields.filter(f => priorityFields.includes(f));
+            const others = inputFields.filter(f => !priorityFields.includes(f));
+            const sortedFields = [...priority, ...others];
+            
+            let html = '';
+            
+            sortedFields.forEach(field => {
+                const fieldId = field.replace(/[^a-zA-Z0-9]/g, '_');
+                const isRequired = ['Name Surname', 'PERSONEL'].includes(field);
+                const isNumber = field.toLowerCase().includes('hours') || 
+                                 field.toLowerCase().includes('rate') || 
+                                 field.toLowerCase().includes('cost') ||
+                                 field.toLowerCase().includes('value');
+                
+                html += `
+                    <div class="col-md-4">
+                        <label class="form-label">${field}${isRequired ? ' *' : ''}</label>
+                        ${isNumber ? 
+                            `<input type="number" class="form-control" name="${field}" id="${fieldId}" step="0.01" ${isRequired ? 'required' : ''}>` :
+                            `<input type="text" class="form-control" name="${field}" id="${fieldId}" ${isRequired ? 'required' : ''}>`
+                        }
+                    </div>
+                `;
+            });
+            
+            container.innerHTML = html;
+            
+            // Show form and hide loading message
+            form.style.display = 'block';
+            loadingMsg.style.display = 'none';
+            
+            // Setup auto-fill for Name Surname
+            setupAutoFill();
+        }
+        
+        function generateDefaultForm() {
+            // Fallback if API fails
+            const container = document.getElementById('formFieldsContainer');
+            container.innerHTML = `
+                <div class="col-md-4">
+                    <label class="form-label">Name Surname (PERSONEL) *</label>
+                    <input type="text" class="form-control" name="Name Surname" id="Name_Surname" required>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">(Week / Month) *</label>
+                    <input type="text" class="form-control" name="(Week / Month)" required>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Total Hours</label>
+                    <input type="number" class="form-control" name="Total Hours" step="0.01">
+                </div>
+            `;
+            document.getElementById('addRecordForm').style.display = 'block';
+            document.getElementById('formLoadingMsg').style.display = 'none';
+        }
+        
+        function setupAutoFill() {
+            const nameInput = document.getElementById('Name_Surname');
+            if (!nameInput) return;
+            
+            let debounceTimer;
+            nameInput.addEventListener('input', function(e) {
+                clearTimeout(debounceTimer);
+                
+                const name = e.target.value.trim();
+                if (name.length < 3) return;
+                
+                debounceTimer = setTimeout(async () => {
+                    try {
+                        const response = await fetch(`/api/get-person-info?name=${encodeURIComponent(name)}`);
+                        if (response.ok) {
+                            const result = await response.json();
+                            if (result.success && result.data) {
+                                const data = result.data;
+                                
+                                // Fill available fields
+                                Object.keys(data).forEach(key => {
+                                    const fieldId = key.replace(/[^a-zA-Z0-9]/g, '_');
+                                    const field = document.getElementById(fieldId);
+                                    if (field && data[key]) {
+                                        field.value = data[key];
+                                    }
+                                });
+                                
+                                showAlert('Auto-filled data from Excel!', 'info');
+                            }
+                        }
+                    } catch (error) {
+                        console.log('Auto-fill error:', error);
+                    }
+                }, 800);
+            });
+        }
+        
+        // Load records on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadFormFields();
+            
+            // Initialize search input handlers
+            const searchInput = document.getElementById('recordsSearch');
+            const clearBtn = document.getElementById('clearSearch');
+
+            function debounce(fn, delay) {
+                let t;
+                return function (...args) {
+                    clearTimeout(t);
+                    t = setTimeout(() => fn.apply(this, args), delay);
+                };
+            }
+
+            if (searchInput) {
+                searchInput.addEventListener('input', debounce(function (e) {
+                    recordsState.search = e.target.value.trim();
+                    loadRecords(1);
+                }, 300));
+            }
+
+            if (clearBtn) {
+                clearBtn.addEventListener('click', function () {
+                    if (searchInput) {
+                        searchInput.value = '';
+                        recordsState.search = '';
+                        loadRecords(1);
+                    }
+                });
+            }
+
+            loadRecords();
+            loadDataPreview();
+            updateDatabaseCount();
+        });
+        
+        // Update database record count
+        async function updateDatabaseCount() {
+            try {
+                const response = await fetch('/api/get-records?page=1&per_page=1');
+                const result = await response.json();
+                const countBadge = document.getElementById('dbRecordCount');
+                if (result.success) {
+                    countBadge.textContent = `${result.total} records in database`;
+                }
+            } catch (error) {
+                console.log('Could not get record count');
+            }
+        }
+        
+        // Clear database function
+        async function clearDatabase() {
+            if (!confirm('⚠️ Are you sure you want to delete ALL records from the database? This action cannot be undone!')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/clear-database', {
+                    method: 'POST',
+                    credentials: 'same-origin'
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to clear database');
+                }
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    showAlert(`Database cleared! ${result.deleted} records deleted.`, 'success');
+                    // Reload records and preview
+                    loadRecords();
+                    loadDataPreview();
+                    updateDatabaseCount();
+                    // Hide preview card
+                    document.getElementById('dataPreviewCard').style.display = 'none';
+                } else {
+                    showAlert(result.error || 'Failed to clear database', 'danger');
+                }
+            } catch (error) {
+                showAlert('Error clearing database: ' + error.message, 'danger');
+            }
+        }
+        
+        // Function to load data preview
+        async function loadDataPreview() {
+            try {
+                const response = await fetch('/api/check-session');
+                const result = await response.json();
+                
+                if (result.hasData) {
+                    displayDataPreview(result);
+                }
+            } catch (error) {
+                console.log('No data to preview');
+            }
+        }
+        
+        // Function to display data preview
+        function displayDataPreview(result) {
+            const previewCard = document.getElementById('dataPreviewCard');
+            const dataStats = document.getElementById('dataStats');
+            const previewHeaders = document.getElementById('previewHeaders');
+            const previewBody = document.getElementById('previewBody');
+            
+            if (!result.data || result.data.length === 0) {
+                previewCard.style.display = 'none';
+                return;
+            }
+            
+            // Show card
+            previewCard.style.display = 'block';
+            
+            // Update stats
+            dataStats.textContent = `${result.shape[0]} rows × ${result.shape[1]} columns`;
+            
+            // Create headers (show first 10 columns)
+            const displayColumns = result.columns.slice(0, 10);
+            previewHeaders.innerHTML = displayColumns.map(col => 
+                `<th class="text-nowrap">${col}</th>`
+            ).join('');
+            
+            if (result.columns.length > 10) {
+                previewHeaders.innerHTML += '<th>...</th>';
+            }
+            
+            // Create rows (show first 20 rows)
+            const displayData = result.data.slice(0, 20);
+            previewBody.innerHTML = displayData.map(row => {
+                let rowHtml = '<tr>';
+                displayColumns.forEach(col => {
+                    const value = row[col] || '';
+                    const displayValue = String(value).length > 50 ? 
+                        String(value).substring(0, 50) + '...' : value;
+                    rowHtml += `<td class="text-nowrap">${displayValue}</td>`;
+                });
+                if (result.columns.length > 10) {
+                    rowHtml += '<td>...</td>';
+                }
+                rowHtml += '</tr>';
+                return rowHtml;
+            }).join('');
+            
+            // Add info row if more data exists
+            if (result.data.length > 20) {
+                const colspan = displayColumns.length + (result.columns.length > 10 ? 1 : 0);
+                previewBody.innerHTML += `
+                    <tr class="table-info">
+                        <td colspan="${colspan}" class="text-center">
+                            <i class="fas fa-info-circle"></i> Showing 20 of ${result.shape[0]} rows. 
+                            <a href="/index.html" class="text-decoration-none">View all in Database View →</a>
+                        </td>
+                    </tr>
+                `;
+            }
+        }
+        
+        // Auto-fill form from Excel data when name changes
+        let autoFillTimeout;
+        const nameInput = document.getElementById('nameInput');
+        const autoFillStatus = document.getElementById('autoFillStatus');
+        
+        if (nameInput) {
+            nameInput.addEventListener('input', function() {
+                clearTimeout(autoFillTimeout);
+                const name = this.value.trim();
+                
+                if (name.length < 3) {
+                    autoFillStatus.style.display = 'none';
+                    return;
+                }
+                
+                autoFillTimeout = setTimeout(async () => {
+                    try {
+                        autoFillStatus.style.display = 'block';
+                        
+                        const response = await fetch(`/api/get-person-info?name=${encodeURIComponent(name)}`);
+                        const result = await response.json();
+                        
+                        if (result.success && result.data) {
+                            const data = result.data;
+                            
+                            // Fill form fields
+                            if (data.Company) document.getElementById('companyInput').value = data.Company;
+                            if (data.Nationality) document.getElementById('nationalityInput').value = data.Nationality;
+                            if (data.Discipline) document.getElementById('disciplineInput').value = data.Discipline;
+                            if (data.Scope) document.getElementById('scopeInput').value = data.Scope;
+                            if (data.Projects) document.getElementById('projectsInput').value = data.Projects;
+                            if (data['Projects/Group']) document.getElementById('projectsGroupInput').value = data['Projects/Group'];
+                            if (data['North/South']) document.getElementById('northSouthInput').value = data['North/South'];
+                            if (data['Hourly Rate']) document.getElementById('hourlyRateInput').value = data['Hourly Rate'];
+                            
+                            autoFillStatus.innerHTML = '<i class="fas fa-check-circle"></i> Auto-filled from Excel!';
+                            autoFillStatus.classList.remove('text-info');
+                            autoFillStatus.classList.add('text-success');
+                            
+                            setTimeout(() => {
+                                autoFillStatus.style.display = 'none';
+                                autoFillStatus.classList.remove('text-success');
+                                autoFillStatus.classList.add('text-info');
+                                autoFillStatus.innerHTML = '<i class="fas fa-info-circle"></i> Auto-filling from Excel...';
+                            }, 3000);
+                        } else {
+                            autoFillStatus.style.display = 'none';
+                        }
+                    } catch (error) {
+                        console.log('Auto-fill error:', error);
+                        autoFillStatus.style.display = 'none';
+                    }
+                }, 800);
+            });
+        }
+        
+        // Handle form submission
+        document.getElementById('addRecordForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(e.target);
+            const record = {};
+            formData.forEach((value, key) => {
+                if (value) record[key] = value;
+            });
+            
+            // Ensure PERSONEL field is set from Name Surname
+            if (record['Name Surname']) {
+                record['PERSONEL'] = record['Name Surname'];
+            }
+            
+            try {
+                const response = await fetch('/api/add-record', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({record})
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    showAlert('Record added successfully! Calculated fields have been automatically computed.', 'success');
+                    e.target.reset();
+                    loadRecords();
+                } else {
+                    showAlert(result.error || 'Failed to add record', 'danger');
+                }
+            } catch (error) {
+                showAlert('Error: ' + error.message, 'danger');
+            }
+        });
+        
+        // Pagination state
+        const recordsState = {
+            page: 1,
+            perPage: 10,
+            pages: 1,
+            total: 0,
+            search: ''
+        };
+
+        async function loadRecords(page = 1) {
+            try {
+                const response = await fetch(`/api/get-records?page=${page}&per_page=${recordsState.perPage}&search=${encodeURIComponent(recordsState.search || '')}`);
+                const result = await response.json();
+
+                if (result.success) {
+                    recordsState.page = result.page || page;
+                    recordsState.pages = result.pages || 1;
+                    recordsState.total = result.total || 0;
+                    displayRecords(result.records || []);
+                    renderPagination();
+                } else {
+                    showAlert(result.error || 'Failed to load records', 'danger');
+                }
+            } catch (error) {
+                showAlert('Error: ' + error.message, 'danger');
+            }
+        }
+
+        function displayRecords(records) {
+            const container = document.getElementById('recordsContainer');
+
+            if (!records || records.length === 0) {
+                container.innerHTML = '<p class="text-muted">No records found.</p>';
+                return;
+            }
+
+            let html = `
+                <div class="table-responsive">
+                    <table class="table table-bordered table-hover table-sm">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>ID</th>
+                                <th>Name Surname</th>
+                                <th>Discipline</th>
+                                <th>Week/Month</th>
+                                <th>Company</th>
+                                <th>Projects</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+
+            records.forEach(record => {
+                const nameSurname = record['Name Surname'] || record['PERSONEL'] || 'N/A';
+                const discipline = record['Discipline'] || '-';
+                const weekMonth = record['Week / Month'] || '-';
+                const company = record['Company'] || '-';
+                const projects = record['Projects'] || '-';
+                const status = record['Status'] || '-';
+
+                html += `
+                    <tr>
+                        <td>${record.id}</td>
+                        <td><strong>${nameSurname}</strong></td>
+                        <td>${discipline}</td>
+                        <td>${weekMonth}</td>
+                        <td>${company}</td>
+                        <td>${projects}</td>
+                        <td><span class="badge bg-${status === 'Active' ? 'success' : 'secondary'}">${status}</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-info" onclick="viewRecord(${record.id})" title="View Details">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                            <button class="btn btn-sm btn-danger" onclick="deleteRecord(${record.id})" title="Delete">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            html += `
+                        </tbody>
+                    </table>
+                </div>
+                <nav aria-label="Records pagination">
+                    <ul class="pagination justify-content-center mt-2" id="recordsPagination"></ul>
+                </nav>
+            `;
+
+            container.innerHTML = html;
+        }
+
+        function renderPagination() {
+            const pag = document.getElementById('recordsPagination');
+            if (!pag) return;
+
+            const page = recordsState.page;
+            const pages = recordsState.pages;
+
+            // Helper to create page item
+            function pageItem(p, label = null, disabled = false, active = false) {
+                return `<li class="page-item ${disabled ? 'disabled' : ''} ${active ? 'active' : ''}"><a class="page-link" href="#" data-page="${p}">${label || p}</a></li>`;
+            }
+
+            let html = '';
+            html += pageItem(Math.max(1, page - 1), '‹', page <= 1);
+
+            // show up to 7 pages centered
+            const maxButtons = 7;
+            let start = Math.max(1, page - Math.floor(maxButtons / 2));
+            let end = Math.min(pages, start + maxButtons - 1);
+            if (end - start < maxButtons - 1) start = Math.max(1, end - maxButtons + 1);
+
+            if (start > 1) html += pageItem(1, '1');
+            if (start > 2) html += `<li class="page-item disabled"><span class="page-link">…</span></li>`;
+
+            for (let p = start; p <= end; p++) {
+                html += pageItem(p, p, false, p === page);
+            }
+
+            if (end < pages - 1) html += `<li class="page-item disabled"><span class="page-link">…</span></li>`;
+            if (end < pages) html += pageItem(pages, pages);
+
+            html += pageItem(Math.min(pages, page + 1), '›', page >= pages);
+
+            pag.innerHTML = html;
+
+            // Attach click handlers
+            pag.querySelectorAll('a.page-link').forEach(a => {
+                a.addEventListener('click', function (ev) {
+                    ev.preventDefault();
+                    const p = parseInt(this.getAttribute('data-page'));
+                    if (!isNaN(p) && p >= 1 && p <= pages && p !== page) {
+                        loadRecords(p);
+                    }
+                });
+            });
+        }
+
+        async function deleteRecord(recordId) {
+            if (!confirm('Are you sure you want to delete this record?')) return;
+
+            try {
+                const response = await fetch(`/api/delete-record/${recordId}`, {
+                    method: 'DELETE'
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showAlert('Record deleted successfully', 'success');
+                    loadRecords(recordsState.page);
+                } else {
+                    showAlert(result.error || 'Failed to delete record', 'danger');
+                }
+            } catch (error) {
+                showAlert('Error: ' + error.message, 'danger');
+            }
+        }
+
+        async function viewRecord(recordId) {
+            try {
+                const response = await fetch(`/api/get-record/${recordId}`);
+                const result = await response.json();
+                if (!result.success) {
+                    showAlert(result.error || 'Record not found', 'danger');
+                    return;
+                }
+
+                const record = result.record;
+                let html = '<div class="row g-3">';
+                Object.entries(record).forEach(([key, value]) => {
+                    if (key !== 'id') {
+                        html += `
+                            <div class="col-md-6">
+                                <strong>${key}:</strong><br>
+                                <span class="text-muted">${value || 'N/A'}</span>
+                            </div>
+                        `;
+                    }
+                });
+                html += '</div>';
+
+                document.getElementById('recordDetailsBody').innerHTML = html;
+                const modal = new bootstrap.Modal(document.getElementById('viewRecordModal'));
+                modal.show();
+            } catch (error) {
+                showAlert('Error: ' + error.message, 'danger');
+            }
+        }
+        
+        // File upload handling
+        document.getElementById('fileInput').addEventListener('change', async function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            showAlert('Uploading and processing file...', 'info');
+            
+            try {
+                const response = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData,
+                    credentials: 'same-origin'
+                });
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Server error: ${response.status} - ${errorText}`);
+                }
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    showAlert(result.message || 'File uploaded successfully!', 'success');
+                    // Show data preview
+                    displayDataPreview(result);
+                    // Update database count
+                    updateDatabaseCount();
+                } else {
+                    showAlert(result.error || 'Upload failed', 'danger');
+                }
+            } catch (error) {
+                console.error('Upload error:', error);
+                showAlert('Error uploading file: ' + error.message, 'danger');
+            } finally {
+                // Reset file input
+                e.target.value = '';
+            }
+        });
+        
+        function showAlert(message, type) {
+            const alertHtml = `
+                <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+                    ${message}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+            `;
+            document.getElementById('alertContainer').innerHTML = alertHtml;
+            setTimeout(() => {
+                document.getElementById('alertContainer').innerHTML = '';
+            }, 5000);
+        }
+        
+        async function logout() {
+            try {
+                await fetch('/api/logout', {method: 'POST'});
+                window.location.href = '/login.html';
+            } catch (error) {
+                console.error('Logout error:', error);
+                window.location.href = '/login.html';
+            }
+        }
+    </script>
+</body>
+
+</html>
