@@ -26,7 +26,7 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 app.config['SESSION_COOKIE_SECURE'] = False  # Set True in production with HTTPS
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 1 hour
+app.config['PERMANENT_SESSION_LIFETIME'] = 28800  # 8 hours (28800 seconds)
 
 # PostgreSQL configuration
 # For local development, use: postgresql://username:password@localhost:5432/database_name
@@ -79,19 +79,6 @@ class DatabaseRecord(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-class SavedFilter(db.Model):
-    """Model to store user's saved filter configurations"""
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    filter_name = db.Column(db.String(200), nullable=False)
-    filter_type = db.Column(db.String(50), nullable=False)  # 'database', 'pivot', or 'graph'
-    filter_config = db.Column(db.Text, nullable=False)  # JSON string of filter configuration
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Relationship
-    user = db.relationship('User', backref='saved_filters')
-
 # Initialize database and create admin user
 def init_db():
     db.create_all()
@@ -134,6 +121,422 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 # Favorites file path
 FAVORITES_FILE_PATH = os.path.join(os.path.dirname(__file__), 'favorite_reports.json')
 
+# ============================================================================
+# EXCEL FORMULA CALCULATION FUNCTIONS
+# ============================================================================
+
+# Cache for Excel reference data
+_excel_cache = {
+    'info_df': None,
+    'hourly_rates_df': None,
+    'summary_df': None,
+    'file_path': None
+}
+
+def load_excel_reference_data(file_path=None):
+    """Load Info, Hourly Rates, and Summary sheets from Excel file into cache"""
+    global _excel_cache
+    
+    if file_path is None:
+        # Try to find latest xlsb file in uploads
+        upload_dir = app.config['UPLOAD_FOLDER']
+        xlsb_files = [f for f in os.listdir(upload_dir) if f.endswith('.xlsb')]
+        if not xlsb_files:
+            return False
+        xlsb_files.sort(reverse=True)
+        file_path = os.path.join(upload_dir, xlsb_files[0])
+    
+    # Check if already cached
+    if _excel_cache['file_path'] == file_path and _excel_cache['info_df'] is not None:
+        return True
+    
+    try:
+        # Read Info sheet
+        df_info = pd.read_excel(file_path, sheet_name='Info', engine='pyxlsb')
+        _excel_cache['info_df'] = df_info
+        
+        # Read Hourly Rates sheet (header on row 2)
+        df_rates = pd.read_excel(file_path, sheet_name='Hourly Rates', engine='pyxlsb', header=1)
+        _excel_cache['hourly_rates_df'] = df_rates
+        
+        # Try to read Summary sheet (may not exist in all files)
+        try:
+            df_summary = pd.read_excel(file_path, sheet_name='Summary', engine='pyxlsb')
+            _excel_cache['summary_df'] = df_summary
+        except:
+            _excel_cache['summary_df'] = None
+        
+        _excel_cache['file_path'] = file_path
+        print(f"✓ Loaded Excel reference data from {os.path.basename(file_path)}")
+        return True
+    except Exception as e:
+        print(f"Error loading Excel reference data: {e}")
+        return False
+
+def xlookup(lookup_value, lookup_array, return_array, if_not_found=0):
+    """Python implementation of Excel XLOOKUP function"""
+    try:
+        # Convert to pandas Series if needed
+        if not isinstance(lookup_array, pd.Series):
+            lookup_array = pd.Series(lookup_array)
+        if not isinstance(return_array, pd.Series):
+            return_array = pd.Series(return_array)
+        
+        # Handle different data types
+        if pd.isna(lookup_value):
+            return if_not_found
+        
+        # Try exact match first
+        mask = lookup_array == lookup_value
+        
+        # If no exact match and both are strings, try normalized comparison
+        if not mask.any() and isinstance(lookup_value, str):
+            try:
+                # Normalize by removing extra spaces and converting to uppercase
+                normalized_lookup = ' '.join(str(lookup_value).strip().upper().split())
+                normalized_array = lookup_array.astype(str).str.strip().str.upper().apply(lambda x: ' '.join(x.split()))
+                mask = normalized_array == normalized_lookup
+            except:
+                pass
+        
+        if mask.any():
+            idx = mask.idxmax()
+            result = return_array.iloc[idx] if isinstance(return_array, pd.Series) else return_array[idx]
+            return result if pd.notna(result) else if_not_found
+        
+        return if_not_found
+    except Exception as e:
+        print(f"XLOOKUP error: {e}")
+        return if_not_found
+
+def safe_float(value, default=0.0):
+    """Safely convert value to float"""
+    try:
+        if pd.isna(value):
+            return default
+        return float(value)
+    except:
+        return default
+
+def safe_str(value, default=''):
+    """Safely convert value to string"""
+    try:
+        if pd.isna(value):
+            return default
+        return str(value).strip()
+    except:
+        return default
+
+def calculate_auto_fields(record_data, file_path=None):
+    """
+    Calculate all auto-populated fields based on Excel formulas
+    
+    Args:
+        record_data: Dictionary containing the manually entered record data
+        file_path: Optional path to Excel file (uses latest if not provided)
+    
+    Returns:
+        Tuple: (updated_record_data, list of fields that are N/A or empty)
+    """
+    # Load Excel reference data
+    if not load_excel_reference_data(file_path):
+        print("Warning: Could not load Excel reference data")
+        return record_data, []
+    
+    info_df = _excel_cache['info_df']
+    rates_df = _excel_cache['hourly_rates_df']
+    summary_df = _excel_cache['summary_df']
+    
+    # Track which fields failed to calculate
+    na_fields = []
+    
+    # Extract values from record_data (these are user inputs)
+    person_id = safe_float(record_data.get('ID', 0))
+    name_surname = safe_str(record_data.get('Name Surname', ''))
+    discipline = safe_str(record_data.get('Discipline', ''))
+    
+    # Handle different variations of Week/Month field name
+    week_month = safe_str(record_data.get('(Week /\nMonth)', '') or 
+                         record_data.get('(Week / Month)', '') or 
+                         record_data.get('Week / Month', '') or
+                         record_data.get('Week/Month', ''))
+    
+    company = safe_str(record_data.get('Company', ''))
+    projects_group = safe_str(record_data.get('Projects/Group', ''))
+    scope = safe_str(record_data.get('Scope', ''))
+    projects = safe_str(record_data.get('Projects', ''))
+    nationality = safe_str(record_data.get('Nationality', ''))
+    office_location = safe_str(record_data.get('Office Location', ''))
+    
+    # Handle different variations of TOTAL MH field name
+    total_mh = safe_float(record_data.get('TOTAL\n MH', 0) or 
+                         record_data.get('TOTAL MH', 0) or
+                         record_data.get('Total MH', 0))
+    
+    kuzey_mh = safe_float(record_data.get('Kuzey MH', 0))
+    kuzey_mh_person = safe_float(record_data.get('Kuzey MH-Person', 0))
+    status = safe_str(record_data.get('Status', ''))
+    
+    print(f'DEBUG: total_mh = {total_mh}, week_month = {week_month}, currency will be calculated')
+    
+    # For İşveren fields that might be entered
+    isveren_currency = safe_str(record_data.get('İşveren - Currency', ''))
+    isveren_sozlesme_no = safe_str(record_data.get('İşveren- Sözleşme No', ''))
+    isveren_hakedis_no = safe_str(record_data.get('İşveren- Hakediş No', ''))
+    isveren_hakedis_donemi = safe_str(record_data.get('İşveren- Hakediş Dönemi', ''))
+    isveren_hakedis_kapsam = safe_str(record_data.get('İşveren- Hakediş Kapsam', ''))
+    isveren_mh_modifiye = safe_float(record_data.get('İşveren- MH-Modifiye', 0))
+    
+    # ========================================================================
+    # FORMULA CALCULATIONS
+    # ========================================================================
+    
+    # 1. North/South = XLOOKUP($G, Info!$N:$N, Info!$Q:$Q)
+    # $G = Scope column (column G in DATABASE = Scope)
+    # Info column N = index 13 (Scope), Info column Q = index 16 (North/South)
+    north_south = xlookup(scope, info_df.iloc[:, 13], info_df.iloc[:, 16], '')
+    # Set all possible variations of the field name
+    record_data['North/\nSouth'] = north_south
+    record_data['North/South'] = north_south
+    record_data['North/ South'] = north_south  # With space after slash
+    print(f'DEBUG: Calculated North/South = {north_south} for Scope = {scope}')
+    
+    # 2. Currency = IF(A=905264,"TL",XLOOKUP($A,'Hourly Rates'!$A:$A,'Hourly Rates'!$G:$G))
+    if person_id == 905264:
+        currency = 'TL'
+    else:
+        # Column G in Hourly Rates = index 6 (Currency 2)
+        currency = xlookup(person_id, rates_df.iloc[:, 0], rates_df.iloc[:, 6], 'USD')
+    record_data['Currency'] = currency
+    
+    print(f'DEBUG: person_id={person_id}, currency={currency}')
+    
+    # 16. AP-CB/Subcon = IF(ISNUMBER(SEARCH("AP-CB", E)), "AP-CB", "Subcon")
+    # E = Company column
+    ap_cb_subcon = 'AP-CB' if 'AP-CB' in company.upper() else 'Subcon'
+    record_data['AP-CB /\nSubcon'] = ap_cb_subcon
+    
+    # 20. LS/Unit Rate = IF(OR((IFERROR(SEARCH("Lumpsum",G),0))>0,E="İ4",E="DEGENKOLB",E="Kilci Danışmanlık"),"Lumpsum","Unit Rate")
+    # G = Scope
+    is_lumpsum = (
+        'LUMPSUM' in scope.upper() or
+        company in ['İ4', 'DEGENKOLB', 'Kilci Danışmanlık']
+    )
+    ls_unit_rate = 'Lumpsum' if is_lumpsum else 'Unit Rate'
+    record_data['LS/Unit Rate'] = ls_unit_rate
+    
+    # 5. Hourly Base Rate = IF(AND(W="Subcon", AT="Unit Rate"),
+    #    XLOOKUP($A,'Hourly Rates'!$A:$A,'Hourly Rates'!J:J),
+    #    XLOOKUP($A,'Hourly Rates'!$A:$A,'Hourly Rates'!H:H))
+    # W = AP-CB/Subcon, AT = LS/Unit Rate
+    if ap_cb_subcon == 'Subcon' and ls_unit_rate == 'Unit Rate':
+        # Column J = index 9 (Hourly Base Rates 3)
+        hourly_base_rate = safe_float(xlookup(person_id, rates_df.iloc[:, 0], rates_df.iloc[:, 9], 0))
+        print(f'DEBUG: Subcon+Unit Rate, looking up column J (index 9)')
+    else:
+        # Column H = index 7 (Hourly Base Rates 2)
+        hourly_base_rate = safe_float(xlookup(person_id, rates_df.iloc[:, 0], rates_df.iloc[:, 7], 0))
+        print(f'DEBUG: Not Subcon+Unit Rate (ap_cb_subcon={ap_cb_subcon}, ls_unit_rate={ls_unit_rate}), looking up column H (index 7)')
+    
+    record_data['Hourly Base Rate'] = hourly_base_rate
+    print(f'DEBUG: hourly_base_rate = {hourly_base_rate}')
+    
+    # 6. Hourly Additional Rate = Complex nested IF
+    # IF($AT="Lumpsum",0,IF($E="AP-CB",0,IF($E="AP-CB / pergel",0,
+    # IF(P="USD",XLOOKUP($A,'Hourly Rates'!$A:$A,'Hourly Rates'!$L:$L),
+    # IF(P="TL",XLOOKUP($A,'Hourly Rates'!$A:$A,'Hourly Rates'!$L:$L)*(XLOOKUP($D,Info!$U:$U,Info!$W:$W)))))))
+    
+    print(f'DEBUG: Calculating Hourly Additional Rate - ls_unit_rate={ls_unit_rate}, company={company}, currency={currency}')
+    
+    if ls_unit_rate == 'Lumpsum':
+        hourly_additional_rate = 0
+        print(f'DEBUG: Lumpsum detected, setting hourly_additional_rate = 0')
+    elif company == 'AP-CB' or company == 'AP-CB / pergel':
+        hourly_additional_rate = 0
+        print(f'DEBUG: AP-CB company detected, setting hourly_additional_rate = 0')
+    else:
+        # Column L = index 11 (Hourly Additional Rates 2)
+        additional_base = safe_float(xlookup(person_id, rates_df.iloc[:, 0], rates_df.iloc[:, 11], 0))
+        print(f'DEBUG: additional_base from Hourly Rates = {additional_base}')
+        
+        if currency == 'USD':
+            hourly_additional_rate = additional_base
+        elif currency == 'TL':
+            # Get TCMB USD/TRY rate from Info sheet
+            # $D = week_month, Info!$U:$U = column 20 (Weeks/Month), Info!$W:$W = column 22 (TCMB USD/TRY)
+            tcmb_rate = safe_float(xlookup(week_month, info_df.iloc[:, 20], info_df.iloc[:, 22], 1))
+            hourly_additional_rate = additional_base * tcmb_rate
+        else:
+            hourly_additional_rate = 0
+        print(f'DEBUG: Final hourly_additional_rate = {hourly_additional_rate}')
+    
+    record_data['Hourly Additional Rates'] = hourly_additional_rate
+    
+    print(f'DEBUG: Stored Hourly Additional Rates = {hourly_additional_rate}')
+    
+    # 3. Hourly Rate = S + V (Hourly Base Rate + Hourly Additional Rate)
+    hourly_rate = hourly_base_rate + hourly_additional_rate
+    record_data['Hourly\n Rate'] = hourly_rate
+    record_data['Hourly Rate'] = hourly_rate
+    
+    # 4. Cost = Q * K (Hourly Rate * TOTAL MH)
+    cost = hourly_rate * total_mh
+    record_data['Cost'] = cost
+    
+    print(f'DEBUG: hourly_rate = {hourly_rate}, total_mh = {total_mh}, cost = {cost}')
+    
+    # 8. General Total Cost (USD) = IF($P="TL",$R/XLOOKUP($D,Info!$U:$U,Info!W:W),
+    #    IF($P="EURO",$R*XLOOKUP($D,Info!$U:$U,Info!X:X),R))
+    # P = Currency, R = Cost, D = week_month
+    if currency == 'TL':
+        tcmb_usd_try = safe_float(xlookup(week_month, info_df.iloc[:, 20], info_df.iloc[:, 22], 1))
+        general_total_cost_usd = cost / tcmb_usd_try if tcmb_usd_try != 0 else 0
+    elif currency == 'EURO':
+        tcmb_eur_usd = safe_float(xlookup(week_month, info_df.iloc[:, 20], info_df.iloc[:, 23], 1))
+        general_total_cost_usd = cost * tcmb_eur_usd
+    else:
+        general_total_cost_usd = cost
+    record_data['General Total\n Cost (USD)'] = general_total_cost_usd
+    record_data['General Total Cost (USD)'] = general_total_cost_usd
+    
+    print(f'DEBUG: currency = {currency}, cost = {cost}, general_total_cost_usd = {general_total_cost_usd}')
+    
+    # 9. Hourly Unit Rate (USD) = X / K (General Total Cost USD / TOTAL MH)
+    hourly_unit_rate_usd = general_total_cost_usd / total_mh if total_mh != 0 else 0
+    record_data['Hourly Unit Rate (USD)'] = hourly_unit_rate_usd
+    record_data['Hourly Unit Rate (USD)'] = hourly_unit_rate_usd
+    
+    # Get NO-1, NO-2, NO-3, NO-10 values needed for İşveren calculations
+    # 14. NO-1 = XLOOKUP($G,Info!$N:$N,Info!$J:$J,0)
+    no_1 = xlookup(scope, info_df.iloc[:, 13], info_df.iloc[:, 9], 0)
+    record_data['NO-1'] = no_1
+    print(f'DEBUG: NO-1 lookup - scope={scope}, result={no_1}')
+    
+    # 16. NO-2 = XLOOKUP($G,Info!$N:$N,Info!$L:$L)
+    no_2 = xlookup(scope, info_df.iloc[:, 13], info_df.iloc[:, 11], '')
+    record_data['NO-2'] = no_2
+    print(f'DEBUG: NO-2 lookup - scope={scope}, result={no_2}')
+    
+    # 17. NO-3 = XLOOKUP($G,Info!$N:$N,Info!$M:$M)
+    no_3 = xlookup(scope, info_df.iloc[:, 13], info_df.iloc[:, 12], '')
+    record_data['NO-3'] = no_3
+    print(f'DEBUG: NO-3 lookup - scope={scope}, result={no_3}')
+    
+    # 18. NO-10 = XLOOKUP($AN,Info!$J:$J,Info!$K:$K)
+    # AN = NO-1
+    no_10 = xlookup(no_1, info_df.iloc[:, 9], info_df.iloc[:, 10], '')
+    record_data['NO-10'] = no_10
+    print(f'DEBUG: NO-10 lookup - no_1={no_1}, result={no_10}')
+    
+    # 10. İşveren Hakediş Birim Fiyat (complex nested IF)
+    # IF(OR(AQ="999-A", AQ="999-C", AQ="414-C", AN=313), Q,
+    #    IF(OR(AN=312, AN=314, AN=316, AQ="360-T"), Q*1.02,
+    #       IF(AQ="517-A", XLOOKUP(A, Info!AC:AC, Info!AH:AH),
+    #          IFERROR(XLOOKUP(AN, Summary!C:C, Summary!AA:AA), 0)
+    #          + IFERROR(XLOOKUP(AQ, Summary!C:C, Summary!AA:AA), 0))))
+    # AQ = NO-2, AN = NO-1, Q = Hourly Rate, A = ID
+    
+    no_1_num = safe_float(no_1, 0)
+    no_2_str = safe_str(no_2, '')
+    
+    if no_2_str in ['999-A', '999-C', '414-C'] or no_1_num == 313:
+        isveren_hakedis_birim_fiyat = hourly_rate
+    elif no_1_num in [312, 314, 316] or no_2_str == '360-T':
+        isveren_hakedis_birim_fiyat = hourly_rate * 1.02
+    elif no_2_str == '517-A':
+        # XLOOKUP(A, Info!AC:AC, Info!AH:AH)
+        # Column AC = index 28 (ID.1), Column AH = index 33
+        isveren_hakedis_birim_fiyat = safe_float(xlookup(person_id, info_df.iloc[:, 28], info_df.iloc[:, 33], 0))
+    else:
+        # Use Summary sheet if available
+        if summary_df is not None:
+            # XLOOKUP(AN, Summary!C:C, Summary!AA:AA) + XLOOKUP(AQ, Summary!C:C, Summary!AA:AA)
+            val1 = safe_float(xlookup(no_1, summary_df.iloc[:, 2], summary_df.iloc[:, 26], 0))
+            val2 = safe_float(xlookup(no_2, summary_df.iloc[:, 2], summary_df.iloc[:, 26], 0))
+            isveren_hakedis_birim_fiyat = val1 + val2
+        else:
+            isveren_hakedis_birim_fiyat = 0
+    
+    record_data['İşveren-Hakediş Birim Fiyat'] = isveren_hakedis_birim_fiyat
+    
+    # 11. İşveren-Hakediş(USD) = IF($L>0,(L*AA),AA*K)
+    # L = Kuzey MH-Person, AA = İşveren Hakediş Birim Fiyat, K = TOTAL MH
+    if kuzey_mh_person > 0:
+        isveren_hakedis = kuzey_mh_person * isveren_hakedis_birim_fiyat
+    else:
+        isveren_hakedis = isveren_hakedis_birim_fiyat * total_mh
+    record_data['İşveren- Hakediş'] = isveren_hakedis
+    
+    # 12. İşveren Hakediş (USD) = IF($Z="EURO",$AB*XLOOKUP($D,Info!$U:$U,Info!$X:$X),$AB)
+    # Z = İşveren Currency, AB = İşveren-Hakediş, D = week_month
+    if isveren_currency == 'EURO':
+        eur_usd_rate = safe_float(xlookup(week_month, info_df.iloc[:, 20], info_df.iloc[:, 23], 1))
+        isveren_hakedis_usd = isveren_hakedis * eur_usd_rate
+    else:
+        isveren_hakedis_usd = isveren_hakedis
+    record_data['İşveren- Hakediş (USD)'] = isveren_hakedis_usd
+    
+    # 13. İşveren Hakediş Birim Fiyatı (USD) = IF($L>0,(AC/L),AC/K)
+    # L = Kuzey MH-Person, AC = İşveren Hakediş (USD), K = TOTAL MH
+    if kuzey_mh_person > 0:
+        isveren_hakedis_birim_fiyat_usd = isveren_hakedis_usd / kuzey_mh_person if kuzey_mh_person != 0 else 0
+    else:
+        isveren_hakedis_birim_fiyat_usd = isveren_hakedis_usd / total_mh if total_mh != 0 else 0
+    record_data['İşveren-Hakediş Birim Fiyat\n(USD)'] = isveren_hakedis_birim_fiyat_usd
+    
+    # 14. Control-1 = XLOOKUP(H,Info!O:O,Info!S:S)
+    # H = Projects, Info O = column 14 (Projects), Info S = column 18 (Reporting)
+    control_1 = xlookup(projects, info_df.iloc[:, 14], info_df.iloc[:, 18], '')
+    record_data['Control-1'] = control_1
+    print(f'DEBUG: Control-1 lookup - projects={projects}, result={control_1}')
+    
+    # 15. TM Liste = IFERROR(XLOOKUP(A,Info!BG:BG,Info!BI:BI),"")
+    # Column BG = index 58, Column BI = index 60
+    try:
+        tm_liste = xlookup(person_id, info_df.iloc[:, 58], info_df.iloc[:, 60], '')
+    except:
+        tm_liste = ''
+    record_data['TM Liste'] = tm_liste
+    print(f'DEBUG: TM Liste lookup - person_id={person_id}, result={tm_liste}')
+    
+    # 16. TM KOD = XLOOKUP(H,Info!O:O,Info!R:R)
+    # H = Projects, Info O = column 14, Info R = column 17 (TM KOD)
+    tm_kod = xlookup(projects, info_df.iloc[:, 14], info_df.iloc[:, 17], '')
+    record_data['TM Kod'] = tm_kod
+    print(f'DEBUG: TM Kod lookup - projects={projects}, result={tm_kod}')
+    
+    # 17. Kontrol-1 = XLOOKUP(H,Info!O:O,Info!J:J)
+    # H = Projects
+    kontrol_1 = xlookup(projects, info_df.iloc[:, 14], info_df.iloc[:, 9], '')
+    record_data['Konrol-1'] = kontrol_1
+    print(f'DEBUG: Kontrol-1 lookup - projects={projects}, result={kontrol_1}')
+    
+    # 18. Kontrol-2 = AN=AO (NO-1 = Kontrol-1)
+    kontrol_2 = no_1 == kontrol_1
+    record_data['Knrtol-2'] = bool(kontrol_2)  # Convert to Python bool for JSON serialization
+    
+    # Check all calculated fields for N/A values
+    fields_to_check = {
+        'North/South': north_south,
+        'Currency': currency,
+        'Control-1': control_1,
+        'TM Liste': tm_liste,
+        'TM Kod': tm_kod,
+        'Konrol-1': kontrol_1,
+        'NO-1': no_1,
+        'NO-2': no_2,
+        'NO-3': no_3,
+        'NO-10': no_10
+    }
+    
+    for field_name, value in fields_to_check.items():
+        # Check if value is empty, None, or 'N/A'
+        if not value or value == '' or value == 'N/A' or (isinstance(value, float) and value == 0 and field_name.startswith('NO-')):
+            na_fields.append(field_name)
+            print(f'DEBUG: Field {field_name} has N/A or empty value')
+    
+    return record_data, na_fields
+
 # Utility functions
 def load_excel_data(file_path, user_filter=None):
     """Load Excel file and return DataFrame from DATABASE sheet with optional user filtering"""
@@ -142,7 +545,6 @@ def load_excel_data(file_path, user_filter=None):
     if file_name.endswith('.xlsb'):
         try:
             df = pd.read_excel(file_path, sheet_name='DATABASE', engine='pyxlsb')
-       
         except:
             df = pd.read_excel(file_path, engine='pyxlsb')
     else:
@@ -344,424 +746,70 @@ def get_combined_data(file_path=None, user_filter=None):
         return combined_df
     return pd.DataFrame()
 
-# Global cache for lookup tables
-_lookup_cache = {'info': None, 'rates': None, 'timestamp': None}
-
-import os
-import pandas as pd
-
-# initialize cache at module level
-_lookup_cache = {'info': None, 'rates': None, 'timestamp': None}
-
-def _find_column(df, *must_have_substrings):
-    """Return first column name in df whose lowercase name contains all substrings"""
-    for col in df.columns:
-        name = str(col).lower()
-        if all(s.lower() in name for s in must_have_substrings):
-            return col
-    return None
-
-def load_lookup_tables(file_path=None):
-    """Load Info and Hourly Rates sheets for XLOOKUP operations (robust, cached)."""
-    global _lookup_cache
-
-    try:
-        # if file_path not provided, pick newest .xlsb in UPLOAD_FOLDER
-        if not file_path:
-            upload_dir = app.config.get('UPLOAD_FOLDER')  # safer access
-            if not upload_dir or not os.path.isdir(upload_dir):
-                print("Warning: UPLOAD_FOLDER not set or invalid")
-                return None, None
-            xlsb_files = [f for f in os.listdir(upload_dir) if f.lower().endswith('.xlsb')]
-            if not xlsb_files:
-                return None, None
-            xlsb_files.sort(reverse=True)
-            file_path = os.path.join(upload_dir, xlsb_files[0])
-
-        if not os.path.isfile(file_path):
-            print(f"Warning: lookup file not found: {file_path}")
-            return None, None
-
-        file_mtime = os.path.getmtime(file_path)
-
-        # validate cache
-        if (_lookup_cache.get('timestamp') == file_mtime and
-                _lookup_cache.get('info') is not None and
-                _lookup_cache.get('rates') is not None):
-            return _lookup_cache['info'], _lookup_cache['rates']
-
-        # read sheets - allow header variations; keep as DataFrame even if small
-        df_info = pd.read_excel(file_path, sheet_name='Info', engine='pyxlsb')
-        # 'Hourly Rates' often has a header row offset; try header=0 then header=1 fallback
-        try:
-            df_rates = pd.read_excel(file_path, sheet_name='Hourly Rates', engine='pyxlsb', header=0)
-        except Exception:
-            df_rates = pd.read_excel(file_path, sheet_name='Hourly Rates', engine='pyxlsb', header=1)
-
-        _lookup_cache = {'info': df_info, 'rates': df_rates, 'timestamp': file_mtime}
-        print(f"Loaded lookup tables: Info ({len(df_info)} rows), Rates ({len(df_rates)} rows)")
-        return df_info, df_rates
-
-    except Exception as e:
-        print(f"Warning: Could not load lookup tables: {e}")
-        return None, None
-
-
-def xlookup(lookup_value, lookup_array, return_array, default=None):
-    """
-    Simulate Excel XLOOKUP:
-     - works with pandas Series / lists / numpy arrays
-     - tries numeric match first (when both sides numeric), then case-insensitive string exact match
-     - returns 'default' when not found or on error
-    """
-    try:
-        # normalize arrays to pandas Series
-        if not isinstance(lookup_array, pd.Series):
-            lookup_array = pd.Series(list(lookup_array))
-        if not isinstance(return_array, pd.Series):
-            return_array = pd.Series(list(return_array))
-
-        # empty
-        if lookup_array.empty:
-            return default
-
-        # empty lookup value
-        if lookup_value is None or (isinstance(lookup_value, str) and lookup_value.strip() == '') or pd.isna(lookup_value):
-            return default
-
-        # attempt numeric comparison: convert both to numeric where possible
-        lookup_num = pd.to_numeric(pd.Series([lookup_value]), errors='coerce').iloc[0]
-        arr_nums = pd.to_numeric(lookup_array, errors='coerce')
-
-        if not pd.isna(lookup_num):
-            # find exact numeric match (positional)
-            matches = arr_nums[arr_nums.notna() & (arr_nums == lookup_num)]
-            if not matches.empty:
-                pos = matches.index[0]  # label of first match
-                # use .loc to preserve label alignment between lookup_array and return_array
-                if pos in return_array.index:
-                    result = return_array.loc[pos]
-                else:
-                    # fallback to positional iloc
-                    result = return_array.iloc[pos] if pos < len(return_array) else default
-                return default if pd.isna(result) else result
-
-        # fallback to case-insensitive string match
-        lookup_str = str(lookup_value).strip().upper()
-        # create upper-version of lookup_array values (skip NaN)
-        for pos, val in lookup_array.items():
-            if pd.isna(val):
-                continue
-            if str(val).strip().upper() == lookup_str:
-                result = return_array.loc[pos] if pos in return_array.index else return_array.iloc[pos]
-                return default if pd.isna(result) else result
-
-        return default
-
-    except Exception as e:
-        print(f"XLOOKUP error for value '{lookup_value}': {e}")
-        return default
-
-
 def add_calculated_columns(df):
-    """Add calculated columns based on Excel formulas (robust variant)."""
-    if df is None:
-        return df
+    """Add KAR/ZARAR and BF KAR/ZARAR columns"""
     if df.empty:
-        return df.copy()
-
+        return df
+    
     df = df.copy()
-
-    # load lookup tables
-    df_info, df_rates = load_lookup_tables()
-
-    if df_info is not None:
-        print(f"Info sheet columns: {list(df_info.columns)[:60]}")
-    if df_rates is not None:
-        print(f"Rates sheet columns: {list(df_rates.columns)[:20]}")
-
-    # === 23. LS/Unit Rate - FIRST used by other formulas ===
-    def calc_ls_unit(row):
-        proj_group = str(row.get('Projects/Group', '')).lower()
-        company = str(row.get('Company', '')).lower()
-        # if "lumpsum" appears anywhere in project/group name -> Lumpsum
-        if 'lumpsum' in proj_group:
-            return 'Lumpsum'
-        # company checks (normalize)
-        if any(k in company for k in ['i4', 'degenkolb', 'kilci danışmanlık', 'kilci danismanlik', 'kilci']):
-            return 'Lumpsum'
-        return 'Unit Rate'
-
-    if 'Projects/Group' in df.columns or 'Company' in df.columns:
-        df['LS/Unit Rate'] = df.apply(calc_ls_unit, axis=1)
-
-    # === 7. AP-CB/Subcon ===
-    if 'Company' in df.columns:
-        df['AP-CB/Subcon'] = df['Company'].apply(
-            lambda x: 'AP-CB' if 'AP-CB' in str(x).upper() else 'Subcon'
-        )
-
-    # === 1. North/South from Info sheet ===
-    if df_info is not None and 'Projects/Group' in df.columns:
-        # try to find a column in Info that indicates North/South
-        north_south_col = None
-        for col in df_info.columns:
-            if 'north' in str(col).lower() or 'south' in str(col).lower():
-                north_south_col = col
-                break
-        # find a Projects/Group-like column in Info
-        proj_group_col = _find_column(df_info, 'project', 'group') or df_info.columns[0]
-        if north_south_col:
-            df['North/South'] = df['Projects/Group'].apply(
-                lambda x: xlookup(x, df_info[proj_group_col], df_info[north_south_col], '')
-            )
-
-    # === 2. Currency ===
-    if df_rates is not None:
-        emp_col = _find_column(df_rates, 'emp') or _find_column(df_rates, 'name', 'surname')
-        currency_col = _find_column(df_rates, 'currency') or _find_column(df_rates, 'curr')
-
-        if 'Emp No' in df.columns and emp_col and currency_col:
-            df['Currency'] = df['Emp No'].apply(
-                lambda x: 'TL' if str(x).strip() == '905264' else xlookup(x, df_rates[emp_col], df_rates[currency_col], 'USD')
-            )
-        elif 'Name Surname' in df.columns and emp_col and currency_col:
-            df['Currency'] = df['Name Surname'].apply(
-                lambda x: xlookup(x, df_rates[emp_col], df_rates[currency_col], 'USD')
-            )
-
-    # === 5. Hourly Base Rate ===
-    if df_rates is not None:
-        emp_col = _find_column(df_rates, 'emp') or _find_column(df_rates, 'name', 'surname')
-        # try to find base rate columns (may be named 'Hourly Base Rate', 'Base Rate', etc.)
-        base_rate_cols = [col for col in df_rates.columns if ('hourly' in str(col).lower() and 'base' in str(col).lower()) or ('base' in str(col).lower() and 'rate' in str(col).lower())]
-        # fallback to any numeric-looking rate columns
-        if not base_rate_cols:
-            base_rate_cols = [col for col in df_rates.columns if 'rate' in str(col).lower()]
-
-        if emp_col and base_rate_cols:
-            def calc_base_rate(row):
-                lookup_val = row.get('Emp No') or row.get('Name Surname')
-                if not lookup_val:
-                    return 0.0
-                ap_cb_subcon = row.get('AP-CB/Subcon', '')
-                ls_unit = row.get('LS/Unit Rate', '')
-                # choose a second candidate if available for Subcon+Unit Rate condition
-                if len(base_rate_cols) > 1 and ap_cb_subcon == 'Subcon' and ls_unit == 'Unit Rate':
-                    rate_col = base_rate_cols[1]
-                else:
-                    rate_col = base_rate_cols[0]
-                result = xlookup(lookup_val, df_rates[emp_col], df_rates[rate_col], 0)
-                try:
-                    return float(result) if result not in (None, '') else 0.0
-                except Exception:
-                    return 0.0
-
-            df['Hourly Base Rate'] = df.apply(calc_base_rate, axis=1)
-
-    # === 6. Hourly Additional Rate ===
-    if df_rates is not None:
-        emp_col = _find_column(df_rates, 'emp') or _find_column(df_rates, 'name', 'surname')
-        additional_rate_col = _find_column(df_rates, 'additional', 'rate') or _find_column(df_rates, 'extra', 'rate')
-        if emp_col and additional_rate_col:
-            def calc_additional_rate(row):
-                if row.get('LS/Unit Rate') == 'Lumpsum':
-                    return 0.0
-                if 'AP-CB' in str(row.get('Company', '')).upper():
-                    return 0.0
-                lookup_val = row.get('Emp No') or row.get('Name Surname')
-                if not lookup_val:
-                    return 0.0
-                additional = xlookup(lookup_val, df_rates[emp_col], df_rates[additional_rate_col], 0) or 0
-                try:
-                    additional = float(additional)
-                except Exception:
-                    additional = 0.0
-
-                currency = row.get('Currency', '')
-                if currency == 'USD' or currency == '' or currency is None:
-                    return additional
-                elif currency == 'TL' and df_info is not None:
-                    # try to find week/month and TL rate columns dynamically in Info
-                    week_col = _find_column(df_info, 'week') or _find_column(df_info, 'month') or df_info.columns[0]
-                    tl_rate_col = None
-                    for c in df_info.columns:
-                        cl = str(c).lower()
-                        if ('tl' in cl or 'usd' in cl) and ('rate' in cl or 'kur' in cl):
-                            # prefer TL-specific
-                            if 'tl' in cl:
-                                tl_rate_col = c
-                                break
-                            tl_rate_col = c
-                    if week_col and tl_rate_col:
-                        week_month = row.get('(Week / Month)') or row.get('Week / Month') or ''
-                        exchange_rate = xlookup(week_month, df_info[week_col], df_info[tl_rate_col], 1) or 1
-                        try:
-                            # Convert TL additional to USD by dividing by TL→USD rate
-                            rate = float(exchange_rate) if exchange_rate else 1.0
-                            return additional / rate if rate else additional
-                        except Exception:
-                            return additional
-                else:
-                    return additional
-
-            df['Hourly Additional Rate'] = df.apply(calc_additional_rate, axis=1)
-
-    # === 3. Hourly Rate ===
-    if 'Hourly Base Rate' in df.columns or 'Hourly Additional Rate' in df.columns:
-        df['Hourly Base Rate'] = pd.to_numeric(df.get('Hourly Base Rate', 0), errors='coerce').fillna(0)
-        df['Hourly Additional Rate'] = pd.to_numeric(df.get('Hourly Additional Rate', 0), errors='coerce').fillna(0)
-        df['Hourly Rate'] = df['Hourly Base Rate'] + df['Hourly Additional Rate']
-
-    # === Helper: normalize week/month label for lookups ===
-    def _normalize_week_label(val):
-        try:
-            if pd.isna(val):
-                return ''
-            s = str(val).strip()
-            # If looks like a date, convert to dd/Mon/YYYY
-            dt = pd.to_datetime(s, errors='coerce')
-            if pd.notna(dt):
-                return dt.strftime('%d/%b/%Y')
-            # If looks like "W46" or "Week 46" normalize to "W46"
-            import re
-            m = re.search(r'(?:w|week)\s*(\d{1,2})', s, re.IGNORECASE)
-            if m:
-                return f"W{int(m.group(1))}"
-            return s
-        except Exception:
-            return str(val) if val is not None else ''
-
-    # === 8. General Total Cost (USD) ===
-    if 'Currency' in df.columns and 'Cost' in df.columns and df_info is not None:
-        # try to locate week/month column and exchange columns in Info
-        week_col = _find_column(df_info, 'week') or _find_column(df_info, 'month') or (df_info.columns[0] if len(df_info.columns) else None)
-        usd_rate_col = _find_column(df_info, 'usd', 'rate') or _find_column(df_info, 'usd')
-        euro_rate_col = _find_column(df_info, 'euro', 'rate') or _find_column(df_info, 'euro')
-
-        def calc_general_cost(row):
-            currency = str(row.get('Currency', '')).upper()
-            cost = pd.to_numeric(row.get('Cost', 0), errors='coerce') or 0
-            week_month = _normalize_week_label(row.get('(Week / Month)') or row.get('Week / Month') or '')
-            try:
-                if currency == 'TL':
-                    if week_col and usd_rate_col:
-                        exchange_rate = xlookup(week_month, df_info[week_col], df_info[usd_rate_col], 1) or 1
-                        return cost / float(exchange_rate) if exchange_rate else cost
-                    return cost
-                elif currency in ('EURO', 'EUR'):
-                    if week_col and euro_rate_col:
-                        exchange_rate = xlookup(week_month, df_info[week_col], df_info[euro_rate_col], 1) or 1
-                        return cost * float(exchange_rate) if exchange_rate else cost
-                    return cost
-                else:
-                    return cost
-            except Exception:
-                return cost
-
-        df['General Total Cost (USD)'] = df.apply(calc_general_cost, axis=1)
-
-    # === 9. Hourly Unit Rate (USD) ===
-    if 'General Total Cost (USD)' in df.columns and 'Total Hours' in df.columns:
-        # avoid division by zero by producing NaN if Total Hours zero/NA
-        df['Hourly Unit Rate (USD)'] = pd.to_numeric(df['General Total Cost (USD)'], errors='coerce') / pd.to_numeric(df['Total Hours'], errors='coerce')
-        df['Hourly Unit Rate (USD)'] = df['Hourly Unit Rate (USD)'].replace([pd.NA, pd.NaT], float('nan'))
-
-    # === 10-13 (simplified fallback versions) ===
-    # Implementing simpler versions since Summary sheet structure unknown.
-    if 'Hourly Unit Rate (USD)' in df.columns:
-        df['İşveren Hakediş Birim Fiyat (USD)'] = df['Hourly Unit Rate (USD)']
-
-    if 'İşveren Hakediş Birim Fiyat (USD)' in df.columns:
-        if 'Special Hours' in df.columns:
-            df['İşveren-Hakediş(USD)'] = df.apply(
-                lambda row: (pd.to_numeric(row.get('Special Hours', 0), errors='coerce') * pd.to_numeric(row.get('İşveren Hakediş Birim Fiyat (USD)', 0), errors='coerce'))
-                if pd.to_numeric(row.get('Special Hours', 0), errors='coerce') > 0
-                else (pd.to_numeric(row.get('İşveren Hakediş Birim Fiyat (USD)', 0), errors='coerce') * pd.to_numeric(row.get('Total Hours', 0), errors='coerce')),
-                axis=1
-            )
-        else:
-            df['İşveren-Hakediş(USD)'] = pd.to_numeric(df['İşveren Hakediş Birim Fiyat (USD)'], errors='coerce') * pd.to_numeric(df.get('Total Hours', 0), errors='coerce')
-
-    # === 11. İşveren Hakediş (USD) - currency conversion if required ===
-    if 'İşveren-Hakediş(USD)' in df.columns and 'Currency' in df.columns and df_info is not None:
-        week_col = _find_column(df_info, 'week') or _find_column(df_info, 'month') or (df_info.columns[0] if len(df_info.columns) else None)
-        euro_rate_col = _find_column(df_info, 'euro', 'rate') or _find_column(df_info, 'euro')
-        def calc_isveren_usd(row):
-            currency = str(row.get('Currency', '')).upper()
-            amount = pd.to_numeric(row.get('İşveren-Hakediş(USD)', 0), errors='coerce') or 0
-            week_month = _normalize_week_label(row.get('(Week / Month)') or row.get('Week / Month') or '')
-            try:
-                if currency in ('EURO', 'EUR') and week_col and euro_rate_col:
-                    exchange_rate = xlookup(week_month, df_info[week_col], df_info[euro_rate_col], 1) or 1
-                    return amount * float(exchange_rate)
-                else:
-                    return amount
-            except Exception:
-                return amount
-        df['İşveren Hakediş (USD)'] = df.apply(calc_isveren_usd, axis=1)
-
-    # === 12. İşveren Hakediş Birim Fiyatı (USD) ===
-    if 'İşveren Hakediş (USD)' in df.columns:
-        def calc_unit_price(row):
-            spec_hours = pd.to_numeric(row.get('Special Hours', 0), errors='coerce')
-            denom = spec_hours if (spec_hours and spec_hours > 0) else pd.to_numeric(row.get('Total Hours', 1), errors='coerce')
-            denom = denom if denom and denom != 0 else 1
-            return pd.to_numeric(row.get('İşveren Hakediş (USD)', 0), errors='coerce') / denom
-        df['İşveren-Hakediş Birim Fiyat (USD)'] = df.apply(calc_unit_price, axis=1)
-
-    # === 14-21. Control and lookups from Info sheet ===
-    if df_info is not None:
-        # Projects lookups
-        if 'Projects' in df.columns:
-            proj_lookup_col = _find_column(df_info, 'project') or df_info.columns[0]
-            control_col = _find_column(df_info, 'control')
-            tm_kod_col = _find_column(df_info, 'tm', 'kod') or _find_column(df_info, 'tm')
-            kontrol_col = _find_column(df_info, 'kontrol') or _find_column(df_info, 'konrol')
-            if proj_lookup_col:
-                if control_col:
-                    df['Control-1'] = df['Projects'].apply(lambda x: xlookup(x, df_info[proj_lookup_col], df_info[control_col], ''))
-                if tm_kod_col:
-                    df['TM KOD'] = df['Projects'].apply(lambda x: xlookup(x, df_info[proj_lookup_col], df_info[tm_kod_col], ''))
-                if kontrol_col:
-                    df['Kontrol-1'] = df['Projects'].apply(lambda x: xlookup(x, df_info[proj_lookup_col], df_info[kontrol_col], ''))
-
-        # Projects/Group lookups for N0-1 etc.
-        if 'Projects/Group' in df.columns:
-            proj_group_col = _find_column(df_info, 'project', 'group') or df_info.columns[0]
-            n0_1 = _find_column(df_info, 'no-1') or _find_column(df_info, 'n0-1') or _find_column(df_info, 'no 1')
-            n0_2 = _find_column(df_info, 'no-2') or _find_column(df_info, 'no 2')
-            n0_3 = _find_column(df_info, 'no-3') or _find_column(df_info, 'no 3')
-            if proj_group_col:
-                if n0_1:
-                    df['N0-1'] = df['Projects/Group'].apply(lambda x: xlookup(x, df_info[proj_group_col], df_info[n0_1], ''))
-                if n0_2:
-                    df['NO-2'] = df['Projects/Group'].apply(lambda x: xlookup(x, df_info[proj_group_col], df_info[n0_2], ''))
-                if n0_3:
-                    df['NO-3'] = df['Projects/Group'].apply(lambda x: xlookup(x, df_info[proj_group_col], df_info[n0_3], ''))
-
-        # TM Liste by Emp
-        emp_lookup_col = _find_column(df_info, 'emp') or _find_column(df_info, 'name', 'surname')
-        tm_liste_col = _find_column(df_info, 'tm', 'liste') or _find_column(df_info, 'tm')
-        if emp_lookup_col and tm_liste_col:
-            lookup_field = 'Emp No' if 'Emp No' in df.columns else ('Name Surname' if 'Name Surname' in df.columns else None)
-            if lookup_field:
-                df['TM Liste'] = df[lookup_field].apply(lambda x: xlookup(x, df_info[emp_lookup_col], df_info[tm_liste_col], ''))
-
-    # === 22. Kontrol-2 --- example compare AN and AO if exist ===
-    # If your sheet uses columns 'AN' and 'AO' names, you can map them here; otherwise skip.
-    if 'AN' in df.columns and 'AO' in df.columns:
-        df['Kontrol-2'] = df['AN'] == df['AO']
-
-    # === KAR/ZARAR calculations ===
-    if 'İşveren Hakediş (USD)' in df.columns and 'General Total Cost (USD)' in df.columns:
-        df['KAR/ZARAR'] = pd.to_numeric(df['İşveren Hakediş (USD)'], errors='coerce').fillna(0) - pd.to_numeric(df['General Total Cost (USD)'], errors='coerce').fillna(0)
+    
+    # Check if columns already exist (cached data)
+    if 'KAR/ZARAR' in df.columns and 'BF KAR/ZARAR' in df.columns:
+        return df
+    
+    col_isveren = None
+    col_general = None
+    col_birim = None
+    col_hourly = None
+    
+    for col in df.columns:
+        col_clean = str(col).strip()
+        if 'İşveren- Hakediş (USD)' in col_clean or 'İşveren-Hakediş (USD)' in col_clean:
+            col_isveren = col
+            print(f"Found İşveren column: {col}")
+        elif 'General Total' in col_clean and 'Cost (USD)' in col_clean:
+            col_general = col
+            print(f"Found General Total column: {col}")
+        elif 'İşveren-Hakediş Birim Fiyat' in col_clean and '(USD)' in col_clean:
+            col_birim = col
+            print(f"Found Birim Fiyat column: {col}")
+        elif 'Hourly Unit Rate (USD)' in col_clean:
+            col_hourly = col
+            print(f"Found Hourly Rate column: {col}")
+    
+    if col_isveren and col_general:
+        df['KAR/ZARAR'] = pd.to_numeric(df[col_isveren], errors='coerce') - pd.to_numeric(df[col_general], errors='coerce')
         print(f"Created KAR/ZARAR column with {df['KAR/ZARAR'].notna().sum()} valid values")
-
-    if 'İşveren-Hakediş Birim Fiyat (USD)' in df.columns and 'Hourly Unit Rate (USD)' in df.columns:
-        df['BF KAR/ZARAR'] = pd.to_numeric(df['İşveren-Hakediş Birim Fiyat (USD)'], errors='coerce').fillna(0) - pd.to_numeric(df['Hourly Unit Rate (USD)'], errors='coerce').fillna(0)
+    else:
+        print(f"WARNING: Could not create KAR/ZARAR - missing columns (İşveren: {col_isveren}, General: {col_general})")
+    
+    if col_birim and col_hourly:
+        df['BF KAR/ZARAR'] = pd.to_numeric(df[col_birim], errors='coerce') - pd.to_numeric(df[col_hourly], errors='coerce')
         print(f"Created BF KAR/ZARAR column with {df['BF KAR/ZARAR'].notna().sum()} valid values")
-
+    else:
+        print(f"WARNING: Could not create BF KAR/ZARAR - missing columns (Birim: {col_birim}, Hourly: {col_hourly})")
+    
+    # Format (Week / Month) column if exists
+    week_month_col = None
+    for col in df.columns:
+        if 'week' in str(col).lower() and 'month' in str(col).lower():
+            week_month_col = col
+            break
+    
+    if week_month_col:
+        def format_week_month(val):
+            try:
+                if pd.isna(val):
+                    return val
+                dt = pd.to_datetime(val, errors='coerce')
+                if pd.notna(dt):
+                    return dt.strftime('%d/%b/%Y')
+                return val
+            except:
+                return val
+        
+        df[week_month_col] = df[week_month_col].apply(format_week_month)
+    
     return df
 
 def load_favorites():
@@ -1022,31 +1070,72 @@ def upload_profile_photo():
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/change-password', methods=['POST'])
+@login_required
+def change_password():
+    """Change user password"""
+    try:
+        data = request.json
+        current_password = data.get('current_password')
+        new_password = data.get('new_password')
+        
+        # Validate input
+        if not current_password or not new_password:
+            return jsonify({
+                'success': False,
+                'message': 'Both current and new password are required'
+            }), 400
+        
+        # Get current user
+        user = User.query.get(session['user_id'])
+        if not user:
+            return jsonify({
+                'success': False,
+                'message': 'User not found'
+            }), 404
+        
+        # Verify current password
+        if not check_password_hash(user.password, current_password):
+            return jsonify({
+                'success': False,
+                'message': 'Current password is incorrect'
+            }), 401
+        
+        # Validate new password length
+        if len(new_password) < 6:
+            return jsonify({
+                'success': False,
+                'message': 'New password must be at least 6 characters long'
+            }), 400
+        
+        # Check if new password is different from current
+        if check_password_hash(user.password, new_password):
+            return jsonify({
+                'success': False,
+                'message': 'New password must be different from current password'
+            }), 400
+        
+        # Update password
+        user.password = generate_password_hash(new_password)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Password changed successfully'
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            'success': False,
+            'message': f'Error changing password: {str(e)}'
+        }), 500
+
 @app.route('/api/logout', methods=['POST'])
 def logout():
     """Handle user logout"""
     session.clear()
     return jsonify({'success': True})
-
-# List of calculated fields that should not be in add record form
-CALCULATED_FIELDS = [
-    'North/South', 'North/ South', 'Currency', 'Hourly Rate', 'Cost', 'Hourly Base Rate',
-    'Hourly Additional Rate', 'Hourly Additional Rates', 'AP-CB/Subcon', 'AP-CB / Subcon',
-    'General Total Cost (USD)', 'Hourly Unit Rate (USD)', 
-    'İşveren Hakediş Birim Fiyat', 'İşveren Hakediş Birim Fiyat (USD)', 'İşveren-Hakediş Birim Fiyat',
-    'İşveren-Hakediş(USD)', 'İşveren Hakediş (USD)', 'İşveren-Hakediş Birim Fiyat (USD)',
-    'İşveren- Hakediş (USD)', 'İşveren-Hakediş (USD)',
-    'İsveren - Currency', 'İşveren - Currency',
-    'İşveren- Sözleşme No', 'İşveren Sözleşme No', 'İşveren-Sözleşme No',
-    'İşveren-Hakediş Kapsam', 'İşveren Hakediş Kapsam', 'İşveren- Hakediş Kapsam',
-    'İşveren-Hakediş Dönemi', 'İşveren Hakediş Dönemi', 'İşveren- Hakediş Dönemi',
-    'İşveren-Hakediş No', 'İşveren Hakediş No', 'İşveren- Hakediş No',
-    'İşveren- Hakediş', 'İşveren-Hakediş', 'İşveren Hakediş',
-    'İşveren- MH-Modifiye', 'İşveren MH-Modifiye', 'İşveren-MH-Modifiye',
-    'İşveren- Actual (USD)', 'İşveren Actual (USD)', 'İşveren-Actual (USD)',
-    'Control-1', 'TM Liste', 'TM KOD', 'TM Kod', 'N0-1', 'NO-1', 'Kontrol-1', 'Konrol-1', 'Kontrol-2', 'Knrtol-2',
-    'NO-2', 'NO-3', 'NO-10', 'LS/Unit Rate', 'KAR/ZARAR', 'BF KAR/ZARAR'
-]
 
 @app.route('/api/add-record', methods=['POST'])
 @login_required
@@ -1069,32 +1158,48 @@ def add_record():
         if 'Name Surname' in record_data and 'PERSONEL' not in record_data:
             record_data['PERSONEL'] = record_data['Name Surname']
         
-        # Create DataFrame with single row to calculate formulas
-        df_single = pd.DataFrame([record_data])
-        df_single = add_calculated_columns(df_single)
+        # AUTO-CALCULATE fields based on Excel formulas
+        # Get the latest Excel file path
+        file_path = session.get('current_file')
+        if not file_path or not os.path.exists(file_path):
+            upload_dir = app.config['UPLOAD_FOLDER']
+            xlsb_files = [f for f in os.listdir(upload_dir) if f.endswith('.xlsb')]
+            if xlsb_files:
+                xlsb_files.sort(reverse=True)
+                file_path = os.path.join(upload_dir, xlsb_files[0])
         
-        # Get the calculated record with all formulas applied
-        calculated_record = df_single.iloc[0].to_dict()
+        # Apply automatic calculations
+        record_data, na_fields = calculate_auto_fields(record_data, file_path)
         
-        # Convert numpy types to Python types for JSON serialization
-        for key, value in calculated_record.items():
-            if pd.isna(value):
-                calculated_record[key] = None
-            elif hasattr(value, 'item'):  # numpy types
-                calculated_record[key] = value.item()
+        # If there are N/A fields and no manual values provided, return them for user input
+        if na_fields and not data.get('manual_values_provided'):
+            return jsonify({
+                'na_fields': na_fields,
+                'message': f'Some fields could not be auto-calculated. Please provide values for: {", ".join(na_fields)}'
+            }), 202  # 202 Accepted - needs more input
         
-        # Create new record with calculated fields
+        # If manual values were provided in the second request, merge them
+        if data.get('manual_values_provided') and data.get('manual_values'):
+            manual_values = data.get('manual_values', {})
+            for field, value in manual_values.items():
+                if value and str(value).strip():  # Only set if not empty
+                    record_data[field] = value
+            print(f'DEBUG: Merged manual values: {manual_values}')
+        
+        # Create new record
         new_record = DatabaseRecord(
             personel=personel,
-            data=json.dumps(calculated_record)
+            data=json.dumps(record_data)
         )
         db.session.add(new_record)
         db.session.commit()
         
+        # Clear cache to force reload
+        clear_data_cache()
+        
         return jsonify({'success': True, 'message': 'Record added successfully'})
     except Exception as e:
         db.session.rollback()
-        print(f"Add record error: {str(e)}")
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
@@ -1185,78 +1290,30 @@ def update_record(record_id):
         data = request.json
         record_data = data.get('record', {})
         
+        # AUTO-RECALCULATE fields based on Excel formulas
+        file_path = session.get('current_file')
+        if not file_path or not os.path.exists(file_path):
+            upload_dir = app.config['UPLOAD_FOLDER']
+            xlsb_files = [f for f in os.listdir(upload_dir) if f.endswith('.xlsb')]
+            if xlsb_files:
+                xlsb_files.sort(reverse=True)
+                file_path = os.path.join(upload_dir, xlsb_files[0])
+        
+        # Apply automatic calculations
+        record_data = calculate_auto_fields(record_data, file_path)
+        
         record.personel = record_data.get('PERSONEL', record.personel)
         record.data = json.dumps(record_data)
         record.updated_at = datetime.utcnow()
         
         db.session.commit()
+        
+        # Clear cache to force reload
+        clear_data_cache()
+        
         return jsonify({'success': True, 'message': 'Record updated successfully'})
     except Exception as e:
         db.session.rollback()
-        return jsonify({'error': str(e)}), 500
-
-def is_calculated_field(field_name):
-    """Check if a field is calculated based on patterns"""
-    field_lower = str(field_name).lower()
-    
-    # Check against explicit list
-    if field_name in CALCULATED_FIELDS:
-        return True
-    
-    # Pattern-based detection
-    calculated_patterns = [
-        'kar/zarar', 'kar zarar',
-        'hourly rate', 'hourly base', 'hourly additional', 'hourly unit',
-        'cost (usd)', 'total cost',
-        'hakediş', 'hakedi',
-        'currency', 'north/south', 'north/ south',
-        'control-', 'kontrol-', 'konrol-', 'knrtol-',
-        'tm kod', 'tm liste',
-        'no-1', 'no-2', 'no-3', 'no-10',
-        'ls/unit rate',
-        'ap-cb/subcon', 'ap-cb / subcon'
-    ]
-    
-    for pattern in calculated_patterns:
-        if pattern in field_lower:
-            return True
-    
-    return False
-
-@app.route('/api/get-input-fields', methods=['GET'])
-@login_required
-def get_input_fields():
-    """Get list of fields for add record form (excluding calculated fields)"""
-    try:
-        # Get latest file to determine available columns
-        file_path = session.get('current_file')
-        if not file_path or not os.path.exists(file_path):
-            upload_dir = app.config['UPLOAD_FOLDER']
-            xlsb_files = [f for f in os.listdir(upload_dir) if f.endswith('.xlsb')]
-            if not xlsb_files:
-                return jsonify({'error': 'No data file found'}), 404
-            xlsb_files.sort(reverse=True)
-            file_path = os.path.join(upload_dir, xlsb_files[0])
-        
-        # Load first row to get column names
-        df = load_excel_data(file_path)
-        
-        # Get all columns except calculated ones
-        input_fields = [col for col in df.columns if not is_calculated_field(col)]
-        calculated_fields = [col for col in df.columns if is_calculated_field(col)]
-        
-        print(f"Total columns: {len(df.columns)}")
-        print(f"Input fields: {len(input_fields)}")
-        print(f"Calculated fields: {len(calculated_fields)}")
-        print(f"Calculated fields list: {calculated_fields[:10]}...")  # Print first 10
-        
-        return jsonify({
-            'success': True,
-            'input_fields': input_fields,
-            'calculated_fields': calculated_fields
-        })
-    except Exception as e:
-        print(f"Get input fields error: {str(e)}")
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
@@ -1278,6 +1335,185 @@ def delete_record(record_id):
         return jsonify({'success': True, 'message': 'Record deleted successfully'})
     except Exception as e:
         db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/get-person-suggestions', methods=['GET'])
+@login_required
+def get_person_suggestions():
+    """Get suggestions for a person based on their ID or historical data"""
+    if session.get('role') != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    
+    try:
+        person_id = request.args.get('id', '').strip()
+        name = request.args.get('name', '').strip()
+        
+        if not person_id and not name:
+            return jsonify({'error': 'ID or Name required'}), 400
+        
+        suggestions = {
+            'found': False,
+            'historical_data': {},
+            'info_data': {},
+            'warnings': [],
+            'suggestions': []
+        }
+        
+        # Try to get data from Info and Hourly Rates sheets
+        file_path = session.get('current_file')
+        if not file_path or not os.path.exists(file_path):
+            upload_dir = app.config['UPLOAD_FOLDER']
+            xlsb_files = [f for f in os.listdir(upload_dir) if f.endswith('.xlsb')]
+            if xlsb_files:
+                xlsb_files.sort(reverse=True)
+                file_path = os.path.join(upload_dir, xlsb_files[0])
+        
+        if file_path and os.path.exists(file_path):
+            load_excel_reference_data(file_path)
+            info_df = _excel_cache.get('info_df')
+            rates_df = _excel_cache.get('hourly_rates_df')
+            
+            if info_df is not None and person_id:
+                # Search in Info sheet
+                person_id_num = safe_float(person_id, 0)
+                info_match = info_df[info_df.iloc[:, 0] == person_id_num]
+                
+                if not info_match.empty:
+                    row = info_match.iloc[0]
+                    suggestions['found'] = True
+                    suggestions['info_data'] = {
+                        'Name': safe_str(row.iloc[1]),
+                        'Company': safe_str(row.iloc[2]),
+                        'Nationality': safe_str(row.iloc[3]),
+                        'Discipline': safe_str(row.iloc[6])
+                    }
+            
+            if rates_df is not None and person_id:
+                # Search in Hourly Rates sheet
+                person_id_num = safe_float(person_id, 0)
+                rates_match = rates_df[rates_df.iloc[:, 0] == person_id_num]
+                
+                if not rates_match.empty:
+                    row = rates_match.iloc[0]
+                    suggestions['found'] = True
+                    suggestions['info_data']['Currency'] = safe_str(row.iloc[6])
+                    suggestions['info_data']['Hourly_Base_Rate'] = safe_float(row.iloc[7], 0)
+        
+        # Get historical data from database
+        if name or (suggestions['found'] and suggestions['info_data'].get('Name')):
+            search_name = name or suggestions['info_data'].get('Name', '')
+            historical_records = DatabaseRecord.query.filter_by(personel=search_name).all()
+            
+            if historical_records:
+                # Analyze historical data
+                total_mh_values = []
+                hourly_rates = []
+                
+                for record in historical_records[-10:]:  # Last 10 records
+                    try:
+                        data = json.loads(record.data)
+                        total_mh = safe_float(data.get('TOTAL MH', 0) or data.get('TOTAL\n MH', 0), 0)
+                        hourly_rate = safe_float(data.get('Hourly Rate', 0) or data.get('Hourly\n Rate', 0), 0)
+                        
+                        if total_mh > 0:
+                            total_mh_values.append(total_mh)
+                        if hourly_rate > 0:
+                            hourly_rates.append(hourly_rate)
+                    except:
+                        continue
+                
+                if total_mh_values:
+                    avg_mh = sum(total_mh_values) / len(total_mh_values)
+                    min_mh = min(total_mh_values)
+                    max_mh = max(total_mh_values)
+                    
+                    suggestions['historical_data']['avg_total_mh'] = round(avg_mh, 2)
+                    suggestions['historical_data']['min_total_mh'] = round(min_mh, 2)
+                    suggestions['historical_data']['max_total_mh'] = round(max_mh, 2)
+                    suggestions['historical_data']['record_count'] = len(historical_records)
+                    
+                    suggestions['suggestions'].append(
+                        f"Historical average TOTAL MH: {round(avg_mh, 2)} hours (range: {round(min_mh, 2)} - {round(max_mh, 2)})"
+                    )
+                
+                if hourly_rates:
+                    avg_rate = sum(hourly_rates) / len(hourly_rates)
+                    suggestions['historical_data']['avg_hourly_rate'] = round(avg_rate, 2)
+                    suggestions['suggestions'].append(
+                        f"Historical average Hourly Rate: ${round(avg_rate, 2)}"
+                    )
+        
+        # Add general suggestions
+        if suggestions['found']:
+            suggestions['suggestions'].append("✓ Person found in Info/Hourly Rates sheets - data will be auto-filled")
+        
+        return jsonify({
+            'success': True,
+            'suggestions': suggestions
+        })
+    
+    except Exception as e:
+        print(f"Get person suggestions error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/validate-record', methods=['POST'])
+@login_required
+def validate_record():
+    """Validate record data before saving and provide warnings"""
+    if session.get('role') != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    
+    try:
+        data = request.json
+        record_data = data.get('record', {})
+        
+        warnings = []
+        errors = []
+        
+        # Required field validation
+        if not record_data.get('Name Surname') and not record_data.get('PERSONEL'):
+            errors.append("Name Surname is required")
+        
+        if not record_data.get('ID'):
+            warnings.append("ID is missing - calculations may not work correctly")
+        
+        # TOTAL MH validation
+        total_mh = safe_float(record_data.get('TOTAL MH', 0) or record_data.get('TOTAL\n MH', 0), 0)
+        
+        if total_mh == 0:
+            warnings.append("TOTAL MH is 0 - Cost will be 0")
+        elif total_mh < 0:
+            errors.append("TOTAL MH cannot be negative")
+        elif total_mh > 500:
+            warnings.append(f"TOTAL MH ({total_mh}) seems unusually high - please verify")
+        elif total_mh < 1:
+            warnings.append(f"TOTAL MH ({total_mh}) is less than 1 hour - please verify this is correct")
+        
+        # Week/Month validation
+        week_month = safe_str(record_data.get('(Week /\nMonth)', '') or 
+                             record_data.get('(Week / Month)', '') or 
+                             record_data.get('Week / Month', ''))
+        if not week_month:
+            warnings.append("Week/Month is missing - currency conversion may not work")
+        
+        # Scope validation
+        scope = safe_str(record_data.get('Scope', ''))
+        if not scope:
+            warnings.append("Scope is missing - North/South and other lookups will fail")
+        
+        return jsonify({
+            'success': True,
+            'valid': len(errors) == 0,
+            'errors': errors,
+            'warnings': warnings
+        })
+    
+    except Exception as e:
+        print(f"Validate record error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/get-person-info', methods=['GET'])
@@ -1507,6 +1743,120 @@ def check_session():
         traceback.print_exc()
         return jsonify({'hasData': False, 'error': str(e)})
 
+@app.route('/api/get-input-fields', methods=['GET'])
+@login_required
+def get_input_fields():
+    """Get input fields and calculated fields from database schema"""
+    try:
+        # Get user filter (None for admin, name for regular users)
+        user_filter = None if session.get('role') == 'admin' else session.get('name')
+        
+        # Get combined data from file and database
+        file_path = session.get('current_file')
+        df = get_combined_data(file_path, user_filter)
+        
+        # Define auto-calculated fields (these should NOT appear in the add record form)
+        auto_calculated_fields = [
+            'North/\nSouth',
+            'North/South',
+            'North/ South',
+            'Currency',
+            'Hourly\n Rate',
+            'Hourly Rate',
+            'Cost',
+            'Hourly Base Rate',
+            'Hourly Additional Rates',
+            'AP-CB /\nSubcon',
+            'AP-CB/Subcon',
+            'AP-CB / Subcon',
+            'General Total\n Cost (USD)',
+            'General Total Cost (USD)',
+            'Hourly Unit Rate (USD)',
+            'İşveren-Hakediş Birim Fiyat',
+            'İşveren- Hakediş',
+            'İşveren- Hakediş (USD)',
+            'İşveren-Hakediş Birim Fiyat\n(USD)',
+            'İşveren-Hakediş Birim Fiyat (USD)',
+            'Control-1',
+            'Control-1\n TM Liste',
+            'Control-1\n TM Kod',
+            'TM Liste',
+            'TM Kod',
+            'NO-1',
+            'Kontrol-1',
+            'Kontrol-2',
+            'Konrol-1',
+            'Knrtol-2',
+            'NO-2',
+            'NO-3',
+            'NO-10',
+            'LS/Unit Rate',
+            'KAR/ZARAR',
+            'BF KAR/ZARAR'
+        ]
+        
+        if df.empty:
+            # Return default fields if no data exists
+            default_input_fields = [
+                'ID',
+                'Name Surname',
+                'Discipline',
+                '(Week /\nMonth)',
+                'Company',
+                'Projects/Group',
+                'Scope',
+                'Projects',
+                'Nationality',
+                'Office Location',
+                'TOTAL\n MH',
+                'Kuzey MH',
+                'Kuzey MH-Person',
+                'Status',
+                'PP',
+                'Actual Value',
+                'İşveren - Currency',
+                'İşveren- Sözleşme No',
+                'İşveren- Hakediş No',
+                'İşveren- Hakediş Dönemi',
+                'İşveren- Hakediş Kapsam',
+                'İşveren- MH-Modifiye',
+                'İşveren- Actual (USD)'
+            ]
+            
+            return jsonify({
+                'success': True,
+                'input_fields': default_input_fields,
+                'calculated_fields': auto_calculated_fields
+            })
+        
+        # Get all columns from data
+        all_columns = df.columns.tolist()
+        
+        # Input fields are all columns except auto-calculated ones
+        input_fields = [col for col in all_columns if col not in auto_calculated_fields]
+        
+        # Remove internal PERSONEL if Name Surname exists
+        if 'Name Surname' in input_fields and 'PERSONEL' in input_fields:
+            input_fields.remove('PERSONEL')
+        
+        return jsonify({
+            'success': True,
+            'input_fields': input_fields,
+            'calculated_fields': auto_calculated_fields
+        })
+    
+    except Exception as e:
+        print(f"Get input fields error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'input_fields': ['ID', 'Name Surname', 'Discipline', '(Week /\nMonth)', 'Company', 'Projects/Group', 
+                            'Scope', 'Projects', 'Nationality', 'Office Location', 'TOTAL\n MH', 'Status'],
+            'calculated_fields': []
+        }), 500
+
 @app.route('/api/upload', methods=['POST'])
 @login_required
 def upload_file():
@@ -1693,6 +2043,8 @@ def get_filtered_options():
     try:
         filters = request.json.get('filters', {})
         
+        print(f'DEBUG: Received filters: {filters}')
+        
         # Get user filter
         user_filter = None if session.get('role') == 'admin' else session.get('name')
         
@@ -1701,35 +2053,74 @@ def get_filtered_options():
         df = get_combined_data(file_path, user_filter)
         df = add_calculated_columns(df)
         
-        # Apply filters
+        print(f'DEBUG: Total rows before filtering: {len(df)}')
+        
+        # Apply filters progressively (cascading)
         for col, values in filters.items():
             if col in df.columns and values:
                 # Convert both to strings for consistent comparison
                 df_col_str = df[col].astype(str)
                 values_str = [str(v) for v in values]
                 df = df[df_col_str.isin(values_str)]
+                print(f'DEBUG: After filtering {col}: {len(df)} rows remain')
+        
+        print(f'DEBUG: Total rows after filtering: {len(df)}')
         
         # Get available options for each column after filtering
+        # This creates the cascading effect - only show options that exist in filtered data
         filter_cols = []
         skip_cols = ['PERSONEL', 'id', 'created_at', 'updated_at']
         
-        # Always add Name Surname filter first
-        if 'Name Surname' in df.columns:
-            name_values = sorted([str(v) for v in df['Name Surname'].dropna().unique()])
-            if name_values:
-                filter_cols.append({
-                    'name': 'Name Surname',
-                    'values': name_values
-                })
+        # Define preferred order for filters
+        preferred_order = [
+            'Name Surname',
+            'Discipline',
+            '(Week /\nMonth)',
+            '(Week / Month)',
+            'Week / Month',
+            'Company',
+            'Projects/Group',
+            'Nationality',
+            'Office Location',
+            'Kuzey MH-Person',
+            'Status',
+            'North/\nSouth',
+            'North/South',
+            'Currency',
+            'PP'
+        ]
         
+        # Process columns in preferred order first
+        processed_cols = set()
+        for pref_col in preferred_order:
+            if pref_col in df.columns and pref_col not in skip_cols:
+                try:
+                    unique_count = df[pref_col].nunique()
+                    
+                    if unique_count > 0 and unique_count <= 500:
+                        non_null_values = df[pref_col].dropna()
+                        if len(non_null_values) > 0:
+                            unique_values = sorted([str(v) for v in df[pref_col].dropna().unique()])
+                            
+                            filter_cols.append({
+                                'name': pref_col,
+                                'values': unique_values
+                            })
+                            processed_cols.add(pref_col)
+                            print(f'DEBUG: {pref_col}: {len(unique_values)} unique values')
+                except Exception as e:
+                    print(f'DEBUG: Error processing {pref_col}: {e}')
+                    continue
+        
+        # Add remaining columns
         for col in df.columns:
-            if col in skip_cols or col == 'Name Surname':  # Skip Name Surname as it's already added
+            if col in skip_cols or col in processed_cols:
                 continue
                 
             try:
                 unique_count = df[col].nunique()
                 
-                if unique_count > 0 and unique_count <= 200:
+                if unique_count > 0 and unique_count <= 500:
                     non_null_values = df[col].dropna()
                     if len(non_null_values) > 0:
                         unique_values = sorted([str(v) for v in df[col].dropna().unique()])
@@ -1738,8 +2129,12 @@ def get_filtered_options():
                             'name': col,
                             'values': unique_values
                         })
-            except:
+                        print(f'DEBUG: {col}: {len(unique_values)} unique values')
+            except Exception as e:
+                print(f'DEBUG: Error processing {col}: {e}')
                 continue
+        
+        print(f'DEBUG: Returning {len(filter_cols)} filter columns')
         
         return jsonify({
             'success': True,
@@ -1747,6 +2142,9 @@ def get_filtered_options():
         })
     
     except Exception as e:
+        print(f'ERROR in get_filtered_options: {e}')
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/pivot', methods=['POST'])
@@ -2021,24 +2419,17 @@ def create_chart():
             # Aggregate data by grouping - always use SUM for totals
             if color_param:
                 df_agg = df.groupby([x_col, color_param], as_index=False)[y_col].sum()
-                # Convert to numeric and clean
-                df_agg[y_col] = pd.to_numeric(df_agg[y_col], errors='coerce').fillna(0)
                 fig = px.bar(df_agg, x=x_col, y=y_col, color=color_param)
             else:
                 df_agg = df.groupby(x_col, as_index=False)[y_col].sum()
-                df_agg[y_col] = pd.to_numeric(df_agg[y_col], errors='coerce').fillna(0)
                 fig = px.bar(df_agg, x=x_col, y=y_col)
         elif chart_type == 'line':
             # Aggregate data properly by grouping X and Color columns
             if color_param:
                 # Group by both X axis and Color, then sum the Y values
                 df_agg = df.groupby([x_col, color_param], as_index=False)[y_col].sum()
-                # Ensure data types are correct - convert to float64 explicitly for Plotly 6.x
-                df_agg[y_col] = pd.to_numeric(df_agg[y_col], errors='coerce').astype('float64').fillna(0)
-                # Debug output
-                print(f"\nDEBUG Line Chart: {len(df_agg)} rows after aggregation")
-                print(f"DEBUG Y-axis ({y_col}) range: min={df_agg[y_col].min()}, max={df_agg[y_col].max()}")
-                print(f"DEBUG Sample values:\n{df_agg[[x_col, color_param, y_col]].head(10)}\n")
+                # Ensure data types are correct
+                df_agg[y_col] = pd.to_numeric(df_agg[y_col], errors='coerce').fillna(0)
                 
                 # Sort by date if x_col looks like dates (contains /)
                 if df_agg[x_col].astype(str).str.contains('/', na=False).any():
@@ -2075,18 +2466,13 @@ def create_chart():
                         df_agg = df_agg.sort_values([color_param, x_col])
                 else:
                     df_agg = df_agg.sort_values([color_param, x_col])
-                
-                # Final debug before creating chart
-                print(f"DEBUG FINAL: {len(df_agg)} rows before px.line()")
-                print(f"DEBUG FINAL Y range: min={df_agg[y_col].min()}, max={df_agg[y_col].max()}")
-                print(f"DEBUG FINAL dtypes: {df_agg.dtypes}")
                     
                 fig = px.line(df_agg, x=x_col, y=y_col, color=color_param, markers=True)
             else:
                 # Group by X axis only, then sum the Y values
                 df_agg = df.groupby(x_col, as_index=False)[y_col].sum()
-                # Ensure data types are correct - convert to float64 explicitly for Plotly 6.x
-                df_agg[y_col] = pd.to_numeric(df_agg[y_col], errors='coerce').astype('float64').fillna(0)
+                # Ensure data types are correct
+                df_agg[y_col] = pd.to_numeric(df_agg[y_col], errors='coerce').fillna(0)
                 
                 # Sort by date if x_col looks like dates
                 if df_agg[x_col].astype(str).str.contains('/', na=False).any():
@@ -2128,16 +2514,13 @@ def create_chart():
             # Scatter plots show individual points, but can still aggregate
             if color_param:
                 df_agg = df.groupby([x_col, color_param], as_index=False)[y_col].sum()
-                df_agg[y_col] = pd.to_numeric(df_agg[y_col], errors='coerce').astype('float64').fillna(0)
                 fig = px.scatter(df_agg, x=x_col, y=y_col, color=color_param)
             else:
                 df_agg = df.groupby(x_col, as_index=False)[y_col].sum()
-                df_agg[y_col] = pd.to_numeric(df_agg[y_col], errors='coerce').astype('float64').fillna(0)
                 fig = px.scatter(df_agg, x=x_col, y=y_col)
         elif chart_type == 'pie':
             # Aggregate for pie chart
             df_pie = df.groupby(x_col)[y_col].sum().reset_index()
-            df_pie[y_col] = pd.to_numeric(df_pie[y_col], errors='coerce').astype('float64').fillna(0)
             # Limit to top 10 slices
             df_pie = df_pie.nlargest(10, y_col)
             fig = px.pie(df_pie, names=x_col, values=y_col)
@@ -2156,42 +2539,25 @@ def create_chart():
                 xaxis_title=x_col,
                 yaxis_title=y_col,
                 height=500,
-                showlegend=True if color_param else False,
-                xaxis={
-                    'tickangle': -45,
-                    'automargin': True,
-                    'tickmode': 'auto',
-                    'nticks': 20
-                },
-                yaxis={
-                    'automargin': True,
-                    'exponentformat': 'none',
-                    'separatethousands': True
-                },
-                margin=dict(l=60, r=40, t=80, b=120)
+                showlegend=True if color_param else False
             )
             
-            # Serialize using Plotly's JSON encoder to convert numpy arrays to lists
-            import json
-            from plotly.utils import PlotlyJSONEncoder
-            chart_json = json.dumps(fig, cls=PlotlyJSONEncoder)
-            
-            # Debug: Verify the data is correct
-            parsed = json.loads(chart_json)
-            if 'data' in parsed and len(parsed['data']) > 0:
-                first_trace = parsed['data'][0]
-                if isinstance(first_trace.get('y'), list):
-                    y_values = first_trace['y']
-                    print(f"\nDEBUG JSON: First trace has {len(y_values)} Y values (list)")
-                    print(f"DEBUG JSON Y range: min={min(y_values)}, max={max(y_values)}")
-                    print(f"DEBUG JSON First 10 Y values: {y_values[:10]}\n")
-                else:
-                    print(f"\nDEBUG JSON: y type after encoding: {type(first_trace.get('y'))}")
-                    print(f"Content: {first_trace.get('y')}\n")
+            # Convert to JSON string - use Plotly's built-in method which handles numpy arrays
+            try:
+                import plotly.utils
+                chart_json = plotly.utils.PlotlyJSONEncoder().encode(fig)
+            except Exception as encode_err:
+                print(f"Plotly encoding error: {str(encode_err)}")
+                # Fallback: try to_json method
+                try:
+                    chart_json = fig.to_json()
+                except Exception as json_err:
+                    print(f"Plotly to_json error: {str(json_err)}")
+                    return jsonify({'error': f'Failed to encode chart: {str(encode_err)}'}), 500
             
             return jsonify({
                 'success': True,
-                'chart': chart_json  # Send as JSON string for frontend to parse
+                'chart': chart_json
             })
         else:
             return jsonify({'error': 'Failed to create chart'}), 500
@@ -2201,119 +2567,6 @@ def create_chart():
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
-
-# Helper: build Plotly figure from chart config and dataframe (for exports)
-def build_chart_figure(df, chart_config):
-    """Create a Plotly figure from a dataframe and a chart config dict.
-    Expected keys in chart_config: chart_type, x, y, color, filters (optional)
-    """
-    import plotly.express as px
-    import warnings
-    cfg = chart_config or {}
-    chart_type = cfg.get('chart_type') or cfg.get('type') or 'line'
-    x_col = cfg.get('x') or cfg.get('x_column')
-    y_col = cfg.get('y') or cfg.get('y_column')
-    color_col = cfg.get('color') or cfg.get('color_column')
-    filters = cfg.get('filters', {})
-
-    if df.empty or not x_col or not y_col:
-        return None
-
-    # Apply filters first
-    if filters:
-        for col, values in filters.items():
-            if col in df.columns and values:
-                df = df[df[col].isin(values)]
-    if df.empty:
-        return None
-
-    # Calculated columns
-    df = add_calculated_columns(df)
-
-    # Clean data
-    df[x_col] = df[x_col].fillna('').astype(str)
-    df[y_col] = pd.to_numeric(df[y_col], errors='coerce').fillna(0)
-    if color_col and color_col in df.columns:
-        df[color_col] = df[color_col].fillna('')
-    df = df.dropna(subset=[x_col, y_col])
-    if df.empty:
-        return None
-
-    # Prefer date strings over week codes for line
-    if chart_type == 'line':
-        has_dates = df[x_col].str.contains('/', na=False).any()
-        has_week_codes = df[x_col].str.match(r'^W\d+$', case=False, na=False).any()
-        if has_dates and has_week_codes:
-            df = df[df[x_col].str.contains('/', na=False)]
-            if df.empty:
-                return None
-
-    # Sort if looks like date
-    try:
-        with warnings.catch_warnings():
-            warnings.filterwarnings('ignore', category=UserWarning)
-            x_sort_col = f'{x_col}_sort_temp'
-            df[x_sort_col] = pd.to_datetime(df[x_col], errors='coerce', format='mixed')
-        if df[x_sort_col].notna().any():
-            df = df.sort_values(x_sort_col).drop(columns=[x_sort_col])
-    except Exception:
-        pass
-
-    # Aggregate for most chart types
-    color_param = color_col if color_col and color_col in df.columns else None
-    fig = None
-    if chart_type == 'bar':
-        if color_param:
-            df_agg = df.groupby([x_col, color_param], as_index=False)[y_col].sum()
-            df_agg[y_col] = pd.to_numeric(df_agg[y_col], errors='coerce').fillna(0)
-            fig = px.bar(df_agg, x=x_col, y=y_col, color=color_param)
-        else:
-            df_agg = df.groupby(x_col, as_index=False)[y_col].sum()
-            df_agg[y_col] = pd.to_numeric(df_agg[y_col], errors='coerce').fillna(0)
-            fig = px.bar(df_agg, x=x_col, y=y_col)
-    elif chart_type == 'line':
-        if color_param:
-            df_agg = df.groupby([x_col, color_param], as_index=False)[y_col].sum()
-            df_agg[y_col] = pd.to_numeric(df_agg[y_col], errors='coerce').astype('float64').fillna(0)
-            fig = px.line(df_agg, x=x_col, y=y_col, color=color_param, markers=True)
-        else:
-            df_agg = df.groupby(x_col, as_index=False)[y_col].sum()
-            df_agg[y_col] = pd.to_numeric(df_agg[y_col], errors='coerce').astype('float64').fillna(0)
-            fig = px.line(df_agg, x=x_col, y=y_col, markers=True)
-    elif chart_type == 'scatter':
-        if color_param:
-            df_agg = df.groupby([x_col, color_param], as_index=False)[y_col].sum()
-            df_agg[y_col] = pd.to_numeric(df_agg[y_col], errors='coerce').astype('float64').fillna(0)
-            fig = px.scatter(df_agg, x=x_col, y=y_col, color=color_param)
-        else:
-            df_agg = df.groupby(x_col, as_index=False)[y_col].sum()
-            df_agg[y_col] = pd.to_numeric(df_agg[y_col], errors='coerce').astype('float64').fillna(0)
-            fig = px.scatter(df_agg, x=x_col, y=y_col)
-    elif chart_type == 'pie':
-        df_pie = df.groupby(x_col)[y_col].sum().reset_index()
-        df_pie[y_col] = pd.to_numeric(df_pie[y_col], errors='coerce').astype('float64').fillna(0)
-        df_pie = df_pie.nlargest(10, y_col)
-        fig = px.pie(df_pie, names=x_col, values=y_col)
-    elif chart_type == 'box':
-        fig = px.box(df, x=x_col, y=y_col, color=color_param)
-    elif chart_type == 'histogram':
-        fig = px.histogram(df, x=x_col, y=y_col, color=color_param)
-    else:
-        return None
-
-    if fig:
-        fig.update_layout(
-            template='plotly_white',
-            title=f'{chart_type.upper()} Chart',
-            xaxis_title=x_col,
-            yaxis_title=y_col,
-            height=500,
-            showlegend=True if color_param else False,
-            xaxis={'tickangle': -45, 'automargin': True, 'tickmode': 'auto', 'nticks': 20},
-            yaxis={'automargin': True, 'exponentformat': 'none', 'separatethousands': True},
-            margin=dict(l=60, r=40, t=80, b=120)
-        )
-    return fig
 
 @app.route('/api/favorites', methods=['GET'])
 def get_favorites():
@@ -2532,27 +2785,6 @@ def export_report():
                     if color_col:
                         doc.add_paragraph(f'🎨 Color by: {color_col}')
                     doc.add_paragraph('')
-
-                    # Try to generate and embed chart image
-                    try:
-                        fig = build_chart_figure(df.copy(), {
-                            'chart_type': config.get('chart_type'),
-                            'x': config.get('x_column'),
-                            'y': config.get('y_column'),
-                            'color': config.get('color_column'),
-                            'filters': config.get('filters', {})
-                        })
-                        if fig:
-                            img_bytes = fig.to_image(format='png', width=1000, height=600, scale=2)
-                            import tempfile
-                            tmp_img = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
-                            tmp_img.write(img_bytes)
-                            tmp_img.flush()
-                            doc.add_picture(tmp_img.name, width=Inches(6))
-                            doc.add_paragraph('')
-                    except Exception as e:
-                        doc.add_paragraph(f'⚠️ Chart image export failed: {str(e)}')
-                        doc.add_paragraph('')
                     
                     # Generate chart data table
                     try:
@@ -2645,7 +2877,7 @@ def export_report():
                 download_name=f'report_{datetime.now().strftime("%Y%m%d_%H%M%S")}.docx'
             )
         
-        else:  # Excel export with multiple sheets and chart images
+        else:  # Excel export with multiple sheets
             excel_io = io.BytesIO()
             with pd.ExcelWriter(excel_io, engine='xlsxwriter') as writer:
                 workbook = writer.book
@@ -2708,32 +2940,6 @@ def export_report():
                         })
                     charts_df = pd.DataFrame(chart_data)
                     charts_df.to_excel(writer, sheet_name='Chart Configs', index=False)
-
-                    # Charts sheet with embedded PNGs
-                    charts_ws = writer.book.add_worksheet('Charts')
-                    row = 0
-                    col = 0
-                    for i, config in enumerate(chart_configs, 1):
-                        try:
-                            fig = build_chart_figure(df.copy(), {
-                                'chart_type': config.get('chart_type'),
-                                'x': config.get('x_column'),
-                                'y': config.get('y_column'),
-                                'color': config.get('color_column'),
-                                'filters': config.get('filters', {})
-                            })
-                            if fig:
-                                img_bytes = fig.to_image(format='png', width=1000, height=600, scale=2)
-                                import tempfile
-                                tmp_img = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
-                                tmp_img.write(img_bytes)
-                                tmp_img.flush()
-                                charts_ws.write(row, col, f'Chart {i}: {config.get("chart_type", "").title()}')
-                                charts_ws.insert_image(row + 1, col, tmp_img.name, {'x_scale': 0.7, 'y_scale': 0.7})
-                                row += 35
-                        except Exception as e:
-                            charts_ws.write(row, col, f'Chart {i} export failed: {str(e)}')
-                            row += 2
             
             excel_io.seek(0)
             
@@ -3181,139 +3387,6 @@ def export_charts():
     
     except Exception as e:
         print(f"Charts export error: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/save-filter', methods=['POST'])
-@login_required
-def save_filter():
-    """Save a filter configuration for the current user"""
-    try:
-        data = request.json
-        filter_name = data.get('filter_name', '').strip()
-        filter_type = data.get('filter_type', '').strip()  # 'database', 'pivot', or 'graph'
-        filter_config = data.get('filter_config', {})
-        
-        if not filter_name:
-            return jsonify({'error': 'Filter name is required'}), 400
-        
-        if filter_type not in ['database', 'pivot', 'graph']:
-            return jsonify({'error': 'Invalid filter type. Must be database, pivot, or graph'}), 400
-        
-        # Get current user
-        user = User.query.filter_by(username=session.get('user')).first()
-        if not user:
-            return jsonify({'error': 'User not found'}), 404
-        
-        # Check if filter with same name and type already exists for this user
-        existing_filter = SavedFilter.query.filter_by(
-            user_id=user.id,
-            filter_name=filter_name,
-            filter_type=filter_type
-        ).first()
-        
-        if existing_filter:
-            # Update existing filter
-            existing_filter.filter_config = json.dumps(filter_config)
-            existing_filter.updated_at = datetime.utcnow()
-            db.session.commit()
-            return jsonify({
-                'success': True,
-                'message': 'Filter updated successfully',
-                'filter_id': existing_filter.id
-            })
-        else:
-            # Create new filter
-            new_filter = SavedFilter(
-                user_id=user.id,
-                filter_name=filter_name,
-                filter_type=filter_type,
-                filter_config=json.dumps(filter_config)
-            )
-            db.session.add(new_filter)
-            db.session.commit()
-            return jsonify({
-                'success': True,
-                'message': 'Filter saved successfully',
-                'filter_id': new_filter.id
-            })
-    
-    except Exception as e:
-        db.session.rollback()
-        print(f"Error saving filter: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/load-filters', methods=['GET'])
-@login_required
-def load_filters():
-    """Load all saved filters for the current user"""
-    try:
-        filter_type = request.args.get('filter_type')  # Optional: filter by type
-        
-        # Get current user
-        user = User.query.filter_by(username=session.get('user')).first()
-        if not user:
-            return jsonify({'error': 'User not found'}), 404
-        
-        # Query filters
-        query = SavedFilter.query.filter_by(user_id=user.id)
-        if filter_type and filter_type in ['database', 'pivot', 'graph']:
-            query = query.filter_by(filter_type=filter_type)
-        
-        filters = query.order_by(SavedFilter.updated_at.desc()).all()
-        
-        # Format response
-        filters_list = []
-        for f in filters:
-            filters_list.append({
-                'id': f.id,
-                'filter_name': f.filter_name,
-                'filter_type': f.filter_type,
-                'filter_config': json.loads(f.filter_config),
-                'created_at': f.created_at.isoformat(),
-                'updated_at': f.updated_at.isoformat()
-            })
-        
-        return jsonify({
-            'success': True,
-            'filters': filters_list
-        })
-    
-    except Exception as e:
-        print(f"Error loading filters: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/delete-filter/<int:filter_id>', methods=['DELETE'])
-@login_required
-def delete_filter(filter_id):
-    """Delete a saved filter"""
-    try:
-        # Get current user
-        user = User.query.filter_by(username=session.get('user')).first()
-        if not user:
-            return jsonify({'error': 'User not found'}), 404
-        
-        # Get filter and verify ownership
-        saved_filter = SavedFilter.query.filter_by(id=filter_id, user_id=user.id).first()
-        if not saved_filter:
-            return jsonify({'error': 'Filter not found or you do not have permission to delete it'}), 404
-        
-        db.session.delete(saved_filter)
-        db.session.commit()
-        
-        return jsonify({
-            'success': True,
-            'message': 'Filter deleted successfully'
-        })
-    
-    except Exception as e:
-        db.session.rollback()
-        print(f"Error deleting filter: {str(e)}")
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500

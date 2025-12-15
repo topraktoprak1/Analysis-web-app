@@ -134,6 +134,27 @@
                         </button>
                     </div>
                     
+                    <!-- Filters Section -->
+                    <div class="card shadow mb-4" id="graphFiltersCard" style="display: none;">
+                        <div class="card-header py-3">
+                            <button class="btn btn-sm btn-primary float-end" type="button" data-bs-toggle="collapse" data-bs-target="#graphFiltersCollapse">
+                                <i class="fas fa-filter"></i> Toggle Filters
+                            </button>
+                            <h6 class="m-0 font-weight-bold text-primary">🔍 Data Filters</h6>
+                        </div>
+                        <div class="collapse" id="graphFiltersCollapse">
+                            <div class="card-body">
+                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                    <small class="text-muted">Filter data before generating charts</small>
+                                    <button class="btn btn-sm btn-outline-secondary" onclick="resetGraphFilters()">
+                                        <i class="fas fa-times"></i> Clear All Filters
+                                    </button>
+                                </div>
+                                <div id="graphFiltersContainer" class="row g-3"></div>
+                            </div>
+                        </div>
+                    </div>
+                    
                     <!-- Filter Save/Load Section -->
                     <div class="card shadow mb-4" id="filterManagementCard" style="display: none;">
                         <div class="card-header py-3">
@@ -248,11 +269,14 @@
     
     <script src="{{ url_for('static', filename='bootstrap/js/bootstrap.min.js') }}"></script>
     <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/filter-persistence.js') }}"></script>
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     
     <script>
         let currentData = null;
         let currentColumns = [];
+        let currentFilters = {};
+        let filterColumns = [];
         
         // Check if data is loaded on page load
         document.addEventListener('DOMContentLoaded', function() {
@@ -294,9 +318,15 @@
                 if (result.hasData) {
                     document.getElementById('uploadNotice').style.display = 'none';
                     document.getElementById('chartCountCard').style.display = 'block';
+                    document.getElementById('graphFiltersCard').style.display = 'block';
                     
                     currentData = result.data;
                     currentColumns = result.columns;
+                    
+                    // Populate filters
+                    if (result.filter_columns) {
+                        populateGraphFilters(result.filter_columns);
+                    }
                     
                     // Create default 2 chart configs
                     createChartConfigs();
@@ -718,6 +748,21 @@
             }
         }
         
+        // Load user profile photo
+        function loadUserProfilePhoto() {
+            fetch('/api/profile')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.profile_photo) {
+                        document.getElementById('navProfilePhoto').src = '/static/' + data.profile_photo;
+                    }
+                })
+                .catch(error => console.error('Error loading profile photo:', error));
+        }
+        
+        // Load profile photo on page load
+        loadUserProfilePhoto();
+        
         // ========== GRAPH CONFIGURATION SAVE/LOAD FUNCTIONS ==========
         
         async function saveCurrentGraphConfig() {
@@ -877,6 +922,157 @@
                 console.error('Error deleting configuration:', error);
                 showAlert('Error deleting configuration: ' + error.message, 'danger');
             }
+        }
+        
+        // Populate graph filters
+        function populateGraphFilters(filterCols) {
+            const container = document.getElementById('graphFiltersContainer');
+            if (!container || !filterCols) return;
+            
+            container.innerHTML = '';
+            filterColumns = filterCols;
+            
+            filterCols.forEach((col, colIndex) => {
+                const colDiv = document.createElement('div');
+                colDiv.className = 'col-md-3';
+                
+                let html = `
+                    <div class="card border-primary">
+                        <div class="card-header bg-primary text-white py-2">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <small class="fw-bold">${col.name}</small>
+                                <button class="btn btn-sm btn-light" onclick="toggleAllGraphFilter('${col.name}')" style="padding: 2px 8px;">
+                                    <i class="fas fa-check-double"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="card-body p-2" style="max-height: 250px; overflow-y: auto;">
+                `;
+                
+                col.values.forEach((value, idx) => {
+                    const safeId = `graph_filter_${col.name.replace(/[^a-zA-Z0-9]/g, '_')}_${idx}`;
+                    html += `
+                        <div class="form-check">
+                            <input class="form-check-input filter-checkbox" type="checkbox" value="${value}" 
+                                   id="${safeId}" data-column="${col.name}" checked 
+                                   onchange="onGraphFilterChange('${col.name}')">
+                            <label class="form-check-label small" for="${safeId}" title="${value}">
+                                ${value}
+                            </label>
+                        </div>
+                    `;
+                });
+                
+                html += `
+                        </div>
+                        <div class="card-footer py-1 bg-light">
+                            <small class="text-muted">
+                                <span id="graph_count_${col.name.replace(/[^a-zA-Z0-9]/g, '_')}">${col.values.length}</span> / ${col.values.length} selected
+                            </small>
+                        </div>
+                    </div>
+                `;
+                
+                colDiv.innerHTML = html;
+                container.appendChild(colDiv);
+            });
+            
+            // Initialize filter persistence
+            initFilterPersistence();
+        }
+        
+        function toggleAllGraphFilter(columnName) {
+            const checkboxes = document.querySelectorAll(`input[data-column="${columnName}"]`);
+            const anyUnchecked = Array.from(checkboxes).some(cb => !cb.checked && !cb.disabled);
+            
+            checkboxes.forEach(cb => {
+                if (!cb.disabled) {
+                    cb.checked = anyUnchecked;
+                }
+            });
+            
+            updateGraphFilterCount(columnName);
+            onGraphFilterChange(columnName);
+        }
+        
+        function updateGraphFilterCount(columnName) {
+            const checkboxes = document.querySelectorAll(`input[data-column="${columnName}"]`);
+            const checkedCount = Array.from(checkboxes).filter(cb => cb.checked && !cb.disabled).length;
+            const countElement = document.getElementById(`graph_count_${columnName.replace(/[^a-zA-Z0-9]/g, '_')}`);
+            if (countElement) {
+                countElement.textContent = checkedCount;
+            }
+        }
+        
+        async function onGraphFilterChange(changedColumn) {
+            if (changedColumn) {
+                updateGraphFilterCount(changedColumn);
+            }
+            
+            // Collect current filters
+            currentFilters = {};
+            const checkboxes = document.querySelectorAll('.filter-checkbox:checked:not(:disabled)');
+            
+            checkboxes.forEach(cb => {
+                const column = cb.getAttribute('data-column');
+                if (!currentFilters[column]) {
+                    currentFilters[column] = [];
+                }
+                currentFilters[column].push(cb.value);
+            });
+            
+            // Apply cascading filter
+            try {
+                const response = await fetch('/api/get-filtered-options', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ filters: currentFilters })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    updateGraphCascadingFilters(result.filter_columns);
+                }
+            } catch (error) {
+                console.error('Error updating graph filters:', error);
+            }
+        }
+        
+        function updateGraphCascadingFilters(newFilterColumns) {
+            newFilterColumns.forEach(col => {
+                const availableValues = new Set(col.values);
+                const checkboxes = document.querySelectorAll(`input[data-column="${col.name}"]`);
+                
+                checkboxes.forEach(cb => {
+                    const value = cb.value;
+                    const parentDiv = cb.closest('.form-check');
+                    
+                    if (availableValues.has(value)) {
+                        cb.disabled = false;
+                        parentDiv.style.display = '';
+                        parentDiv.style.opacity = '1';
+                    } else {
+                        cb.disabled = true;
+                        if (cb.checked) {
+                            cb.checked = false;
+                        }
+                        parentDiv.style.display = 'none';
+                    }
+                });
+                
+                updateGraphFilterCount(col.name);
+            });
+        }
+        
+        function resetGraphFilters() {
+            resetAllFiltersGlobally();
+            
+            filterColumns.forEach(col => {
+                updateGraphFilterCount(col.name);
+            });
+            
+            showAlert('All filters cleared!', 'success');
         }
         
         // Show filter management card when charts are available

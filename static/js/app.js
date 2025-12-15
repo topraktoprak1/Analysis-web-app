@@ -260,6 +260,11 @@ function createFilters(filterColumns) {
     `;
     
     filtersContainer.innerHTML = html;
+    
+    // Initialize filter persistence after filters are created
+    if (typeof initFilterPersistence === 'function') {
+        initFilterPersistence();
+    }
 }
 
 // Search filter options
@@ -351,6 +356,12 @@ function clearFilters() {
     
     // Clear from sessionStorage
     sessionStorage.removeItem('activeFilters');
+    
+    // Clear global filters
+    if (typeof clearGlobalFilters === 'function') {
+        clearGlobalFilters();
+    }
+    
     loadExistingData(); // Reload original data
 }
 

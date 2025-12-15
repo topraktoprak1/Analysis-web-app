@@ -220,6 +220,7 @@
     
     <script src="{{ url_for('static', filename='bootstrap/js/bootstrap.min.js') }}"></script>
     <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/filter-persistence.js') }}"></script>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
     
     <script>
@@ -263,6 +264,21 @@
                 window.location.href = '/login.html';
             }
         }
+        
+        // Load user profile photo
+        function loadUserProfilePhoto() {
+            fetch('/api/profile')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.profile_photo) {
+                        document.getElementById('navProfilePhoto').src = '/static/' + data.profile_photo;
+                    }
+                })
+                .catch(error => console.error('Error loading profile photo:', error));
+        }
+        
+        // Load profile photo on page load
+        loadUserProfilePhoto();
         
         // ========== DATABASE FILTER SAVE/LOAD FUNCTIONS ==========
         

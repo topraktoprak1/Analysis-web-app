@@ -255,6 +255,7 @@
     
     <script src="{{ url_for('static', filename='bootstrap/js/bootstrap.min.js') }}"></script>
     <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/filter-persistence.js') }}"></script>
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     
     <script>
@@ -472,6 +473,9 @@
             
             console.log('Filters initialized:', currentFilters);
             console.log('Total filter categories:', Object.keys(currentFilters).length);
+            
+            // Initialize filter persistence after filters are populated
+            initFilterPersistence();
         }
         
         function toggleAllInFilter(columnName) {
@@ -541,18 +545,26 @@
                 const result = await response.json();
                 
                 if (result.success) {
+                    console.log('Received filtered options:', result.filter_columns.length, 'columns');
                     // Update available options for each filter (cascading)
-                    updateCascadingFilters(result.filter_columns);
+                    updateCascadingFilters(result.filter_columns, changedColumn);
                 }
             } catch (error) {
                 console.error('Error updating filters:', error);
             }
         }
         
-        function updateCascadingFilters(newFilterColumns) {
+        function updateCascadingFilters(newFilterColumns, changedColumn) {
+            console.log('Updating cascading filters...');
+            
             newFilterColumns.forEach(col => {
                 const availableValues = new Set(col.values);
                 const checkboxes = document.querySelectorAll(`input[data-column="${col.name}"]`);
+                
+                console.log(`  ${col.name}: ${availableValues.size} available values`);
+                
+                let hiddenCount = 0;
+                let uncheckedCount = 0;
                 
                 checkboxes.forEach(cb => {
                     const value = cb.value;
@@ -563,37 +575,55 @@
                         cb.disabled = false;
                         parentDiv.style.display = '';
                         parentDiv.style.opacity = '1';
+                        
+                        // If this was previously disabled, uncheck it
+                        // (user can manually check it if they want)
                     } else {
-                        // Value is not available - disable and dim
+                        // Value is not available in filtered data - hide it completely
                         cb.disabled = true;
-                        cb.checked = false;
-                        parentDiv.style.opacity = '0.4';
+                        
+                        // Uncheck if it was checked
+                        if (cb.checked) {
+                            cb.checked = false;
+                            uncheckedCount++;
+                        }
+                        
+                        // Hide the option completely
+                        parentDiv.style.display = 'none';
+                        hiddenCount++;
                     }
                 });
                 
+                console.log(`    Hidden: ${hiddenCount}, Unchecked: ${uncheckedCount}`);
+                
+                // Update the footer count
                 updateFilterCount(col.name);
+                
+                // Update the total count display
+                const totalCount = col.values.length;
+                const countElement = document.getElementById(`count_${col.name.replace(/[^a-zA-Z0-9]/g, '_')}`);
+                if (countElement) {
+                    const checkedCount = Array.from(checkboxes).filter(cb => cb.checked && !cb.disabled).length;
+                    const footerText = countElement.closest('.card-footer').querySelector('small');
+                    if (footerText) {
+                        footerText.innerHTML = `<span id="count_${col.name.replace(/[^a-zA-Z0-9]/g, '_')}">${checkedCount}</span> / ${totalCount} available`;
+                    }
+                }
             });
+            
+            console.log('Cascading filters updated');
         }
         
         function clearAllFilters() {
-            const checkboxes = document.querySelectorAll('.filter-checkbox');
-            checkboxes.forEach(cb => {
-                cb.checked = true;
-                cb.disabled = false;
-                const parentDiv = cb.closest('.form-check');
-                parentDiv.style.display = '';
-                parentDiv.style.opacity = '1';
-            });
+            console.log('Clearing all filters...');
             
-            currentFilters = {};
+            // Use global reset function
+            resetAllFiltersGlobally();
             
             // Update all counts
             filterColumns.forEach(col => {
                 updateFilterCount(col.name);
             });
-            
-            // Reset cascading filters by fetching all options
-            onFilterChange(null);
             
             showSuccess('All filters cleared!');
         }
@@ -817,6 +847,21 @@
                 window.location.href = '/login.html';
             }
         }
+        
+        // Load user profile photo
+        function loadUserProfilePhoto() {
+            fetch('/api/profile')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.profile_photo) {
+                        document.getElementById('navProfilePhoto').src = '/static/' + data.profile_photo;
+                    }
+                })
+                .catch(error => console.error('Error loading profile photo:', error));
+        }
+        
+        // Load profile photo on page load
+        loadUserProfilePhoto();
         
         // ========== FILTER SAVE/LOAD FUNCTIONS ==========
         

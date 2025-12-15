@@ -4,7 +4,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, shrink-to-fit=no">
-    <title>Profile - Brand</title>
+    <title>Profile</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='bootstrap/css/bootstrap.min.css') }}">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Nunito:200,200i,300,300i,400,400i,600,600i,700,700i,800,800i,900,900i&amp;display=swap">
     <link rel="stylesheet" href="{{ url_for('static', filename='fonts/fontawesome-all.min.css') }}">
@@ -150,6 +150,36 @@
                                             </form>
                                         </div>
                                     </div>
+                                    
+                                    <!-- Change Password Section -->
+                                    <div class="card shadow mb-3">
+                                        <div class="card-header py-3">
+                                            <p class="text-primary m-0 fw-bold">🔒 Change Password</p>
+                                        </div>
+                                        <div class="card-body">
+                                            <form id="changePasswordForm">
+                                                <div class="mb-3">
+                                                    <label class="form-label" for="current_password"><strong>Current Password</strong></label>
+                                                    <input class="form-control" type="password" id="current_password" name="current_password" placeholder="Enter current password" required>
+                                                </div>
+                                                <div class="mb-3">
+                                                    <label class="form-label" for="new_password"><strong>New Password</strong></label>
+                                                    <input class="form-control" type="password" id="new_password" name="new_password" placeholder="Enter new password" required>
+                                                    <small class="text-muted">Password must be at least 6 characters long</small>
+                                                </div>
+                                                <div class="mb-3">
+                                                    <label class="form-label" for="confirm_password"><strong>Confirm New Password</strong></label>
+                                                    <input class="form-control" type="password" id="confirm_password" name="confirm_password" placeholder="Re-enter new password" required>
+                                                </div>
+                                                <div class="mb-3">
+                                                    <button class="btn btn-primary btn-sm" type="submit">
+                                                        <i class="fas fa-key"></i> Change Password
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        </div>
+                                    </div>
+                                    
                                     <div class="card shadow" style="display: none;">
                                         <div class="card-header py-3">
                                             <p class="text-primary m-0 fw-bold">Contact Settings</p>
@@ -222,6 +252,7 @@
                     // Update profile photo
                     if (data.profile_photo) {
                         document.getElementById('profilePhoto').src = '/static/' + data.profile_photo;
+                        document.getElementById('navProfilePhoto').src = '/static/' + data.profile_photo;
                     }
                 })
                 .catch(error => {
@@ -257,7 +288,9 @@
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
+                    // Update both profile photo and navigation photo
                     document.getElementById('profilePhoto').src = data.photo_url;
+                    document.getElementById('navProfilePhoto').src = data.photo_url;
                     showAlert('Photo updated successfully', 'success');
                 } else {
                     showAlert(data.error || 'Failed to upload photo', 'danger');
@@ -319,6 +352,61 @@
                 }
             }, 5000);
         }
+
+        // Handle change password form
+        document.getElementById('changePasswordForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const currentPassword = document.getElementById('current_password').value;
+            const newPassword = document.getElementById('new_password').value;
+            const confirmPassword = document.getElementById('confirm_password').value;
+            
+            // Validate passwords
+            if (newPassword.length < 6) {
+                alert('New password must be at least 6 characters long');
+                return;
+            }
+            
+            if (newPassword !== confirmPassword) {
+                alert('New passwords do not match');
+                return;
+            }
+            
+            if (currentPassword === newPassword) {
+                alert('New password must be different from current password');
+                return;
+            }
+            
+            // Send password change request
+            fetch('/api/change-password', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    current_password: currentPassword,
+                    new_password: newPassword
+                })
+            })
+            .then(response => response.json())
+            .then(result => {
+                if (result.success) {
+                    showAlert('success', 'Password changed successfully! Please login with your new password.');
+                    // Clear form
+                    document.getElementById('changePasswordForm').reset();
+                    // Optional: logout user after password change
+                    setTimeout(() => {
+                        window.location.href = '/logout';
+                    }, 2000);
+                } else {
+                    showAlert('danger', result.message || 'Failed to change password');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                showAlert('danger', 'An error occurred while changing password');
+            });
+        });
 
         function loadUserDatabaseInfo() {
             fetch('/api/check-session')
