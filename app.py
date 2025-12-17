@@ -79,6 +79,16 @@ class DatabaseRecord(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+class SavedFilter(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    filter_name = db.Column(db.String(200), nullable=False)
+    filter_type = db.Column(db.String(50), nullable=False)  # 'database', 'pivot', 'graph'
+    filter_config = db.Column(db.Text, nullable=False)  # JSON string of filter configuration
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 # Initialize database and create admin user
 def init_db():
     db.create_all()
@@ -311,19 +321,33 @@ def calculate_auto_fields(record_data, file_path=None):
     
     print(f'DEBUG: person_id={person_id}, currency={currency}')
     
+    # 3. Projects/Group = XLOOKUP($H, Info!$O:$O, Info!$P:$P)
+    # $H = Projects column (column H in DATABASE = Projects)
+    # Info column O = index 14 (Projects lookup), Info column P = index 15 (Projects/Group return)
+    projects_group = xlookup(projects, info_df.iloc[:, 14], info_df.iloc[:, 15], '')
+    record_data['Projects/Group'] = projects_group
+    print(f'DEBUG: Calculated Projects/Group = {projects_group} for Projects = {projects}')
+    
     # 16. AP-CB/Subcon = IF(ISNUMBER(SEARCH("AP-CB", E)), "AP-CB", "Subcon")
     # E = Company column
     ap_cb_subcon = 'AP-CB' if 'AP-CB' in company.upper() else 'Subcon'
     record_data['AP-CB /\nSubcon'] = ap_cb_subcon
     
     # 20. LS/Unit Rate = IF(OR((IFERROR(SEARCH("Lumpsum",G),0))>0,E="İ4",E="DEGENKOLB",E="Kilci Danışmanlık"),"Lumpsum","Unit Rate")
-    # G = Scope
-    is_lumpsum = (
-        'LUMPSUM' in scope.upper() or
-        company in ['İ4', 'DEGENKOLB', 'Kilci Danışmanlık']
-    )
-    ls_unit_rate = 'Lumpsum' if is_lumpsum else 'Unit Rate'
+    # G = Scope, E = Company
+    # Check if any condition is true:
+    # 1. Scope contains "Lumpsum"
+    # 2. Company is "İ4", "DEGENKOLB", or "Kilci Danışmanlık"
+    scope_has_lumpsum = 'lumpsum' in scope.lower() if scope else False
+    company_is_special = company in ['İ4', 'DEGENKOLB', 'Kilci Danışmanlık']
+    
+    if scope_has_lumpsum or company_is_special:
+        ls_unit_rate = 'Lumpsum'
+    else:
+        ls_unit_rate = 'Unit Rate'
+    
     record_data['LS/Unit Rate'] = ls_unit_rate
+    print(f'DEBUG: LS/Unit Rate = {ls_unit_rate} (scope_has_lumpsum={scope_has_lumpsum}, company_is_special={company_is_special})')
     
     # 5. Hourly Base Rate = IF(AND(W="Subcon", AT="Unit Rate"),
     #    XLOOKUP($A,'Hourly Rates'!$A:$A,'Hourly Rates'!J:J),
@@ -407,10 +431,14 @@ def calculate_auto_fields(record_data, file_path=None):
     record_data['Hourly Unit Rate (USD)'] = hourly_unit_rate_usd
     
     # Get NO-1, NO-2, NO-3, NO-10 values needed for İşveren calculations
-    # 14. NO-1 = XLOOKUP($G,Info!$N:$N,Info!$J:$J,0)
-    no_1 = xlookup(scope, info_df.iloc[:, 13], info_df.iloc[:, 9], 0)
+    # 14. NO-1 = XLOOKUP($G,Info!$AU:$AU,Info!$AQ:$AQ,0)
+    # Column AU = 46, Column AQ = 42
+    print(f'DEBUG NO-1: Looking up scope="{scope}" in column AU (46)')
+    print(f'DEBUG NO-1: Sample values in AU: {info_df.iloc[:5, 46].tolist()}')
+    print(f'DEBUG NO-1: Sample values in AQ: {info_df.iloc[:5, 42].tolist()}')
+    no_1 = xlookup(scope, info_df.iloc[:, 46], info_df.iloc[:, 42], 0)
     record_data['NO-1'] = no_1
-    print(f'DEBUG: NO-1 lookup - scope={scope}, result={no_1}')
+    print(f'DEBUG: NO-1 lookup - scope="{scope}", result={no_1}')
     
     # 16. NO-2 = XLOOKUP($G,Info!$N:$N,Info!$L:$L)
     no_2 = xlookup(scope, info_df.iloc[:, 13], info_df.iloc[:, 11], '')
@@ -505,11 +533,14 @@ def calculate_auto_fields(record_data, file_path=None):
     record_data['TM Kod'] = tm_kod
     print(f'DEBUG: TM Kod lookup - projects={projects}, result={tm_kod}')
     
-    # 17. Kontrol-1 = XLOOKUP(H,Info!O:O,Info!J:J)
-    # H = Projects
-    kontrol_1 = xlookup(projects, info_df.iloc[:, 14], info_df.iloc[:, 9], '')
+    # 17. Kontrol-1 = XLOOKUP(H,Info!AV:AV,Info!AQ:AQ)
+    # H = Projects, Column AV = 47, Column AQ = 42
+    print(f'DEBUG Kontrol-1: Looking up projects="{projects}" in column AV (47)')
+    print(f'DEBUG Kontrol-1: Sample values in AV: {info_df.iloc[:5, 47].tolist()}')
+    print(f'DEBUG Kontrol-1: Sample values in AQ: {info_df.iloc[:5, 42].tolist()}')
+    kontrol_1 = xlookup(projects, info_df.iloc[:, 47], info_df.iloc[:, 42], '')
     record_data['Konrol-1'] = kontrol_1
-    print(f'DEBUG: Kontrol-1 lookup - projects={projects}, result={kontrol_1}')
+    print(f'DEBUG: Kontrol-1 lookup - projects="{projects}", result={kontrol_1}')
     
     # 18. Kontrol-2 = AN=AO (NO-1 = Kontrol-1)
     kontrol_2 = no_1 == kontrol_1
@@ -1242,6 +1273,13 @@ def get_records():
         for record in items:
             record_dict = json.loads(record.data)
             record_dict['id'] = record.id
+            
+            # Remove duplicate field names (keep only the standard ones)
+            if 'North/\nSouth' in record_dict:
+                del record_dict['North/\nSouth']
+            if 'North/ South' in record_dict:
+                del record_dict['North/ South']
+            
             records_list.append(record_dict)
 
         return jsonify({
@@ -1271,6 +1309,14 @@ def get_record(record_id):
 
         record_dict = json.loads(record.data)
         record_dict['id'] = record.id
+        
+        # Remove duplicate field names (keep only the standard ones)
+        # Remove old variations of North/South
+        if 'North/\nSouth' in record_dict:
+            del record_dict['North/\nSouth']
+        if 'North/ South' in record_dict:
+            del record_dict['North/ South']
+        
         return jsonify({'success': True, 'record': record_dict})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -1562,12 +1608,14 @@ def get_person_info():
         # Extract data from Info sheet
         if not info_match.empty:
             row = info_match.iloc[0]
-            result['Company'] = str(row.get('Company', '')) if pd.notna(row.get('Company')) else ''
+            # Do NOT pre-fill Company, Discipline, or Projects - these are manual inputs
+            # result['Company'] = str(row.get('Company', '')) if pd.notna(row.get('Company')) else ''
             result['Nationality'] = str(row.get('Nationality', '')) if pd.notna(row.get('Nationality')) else ''
-            result['Discipline'] = str(row.get('Discipline', '')) if pd.notna(row.get('Discipline')) else ''
+            # result['Discipline'] = str(row.get('Discipline', '')) if pd.notna(row.get('Discipline')) else ''
             result['Scope'] = str(row.get('Scope', '')) if pd.notna(row.get('Scope')) else ''
-            result['Projects'] = str(row.get('Projects', '')) if pd.notna(row.get('Projects')) else ''
-            result['Projects/Group'] = str(row.get('Projects/Group', '')) if pd.notna(row.get('Projects/Group')) else ''
+            # result['Projects'] = str(row.get('Projects', '')) if pd.notna(row.get('Projects')) else ''
+            # Projects/Group will be auto-calculated from Projects, so don't pre-fill it
+            # result['Projects/Group'] = str(row.get('Projects/Group', '')) if pd.notna(row.get('Projects/Group')) else ''
             result['North/South'] = str(row.get('North/South', '')) if pd.notna(row.get('North/South')) else ''
         
         # Extract data from Hourly Rates sheet
@@ -1761,6 +1809,7 @@ def get_input_fields():
             'North/South',
             'North/ South',
             'Currency',
+            'Projects/Group',
             'Hourly\n Rate',
             'Hourly Rate',
             'Cost',
@@ -1769,6 +1818,7 @@ def get_input_fields():
             'AP-CB /\nSubcon',
             'AP-CB/Subcon',
             'AP-CB / Subcon',
+            'LS/Unit Rate',
             'General Total\n Cost (USD)',
             'General Total Cost (USD)',
             'Hourly Unit Rate (USD)',
@@ -1790,7 +1840,6 @@ def get_input_fields():
             'NO-2',
             'NO-3',
             'NO-10',
-            'LS/Unit Rate',
             'KAR/ZARAR',
             'BF KAR/ZARAR'
         ]
@@ -2000,6 +2049,549 @@ def upload_file():
         db.session.rollback()  # Rollback any pending transactions
         return jsonify({'error': str(e)}), 500
 
+
+def find_column(df, *possible_names):
+    """Find which variation of a column name exists in the DataFrame"""
+    for name in possible_names:
+        if name in df.columns:
+            return name
+    return None
+
+def set_if_empty(df, idx, col_name, value, debug=False):
+    """Set value only if the cell is empty and column exists"""
+    if col_name and col_name in df.columns:
+        current_val = df.at[idx, col_name]
+        
+        # Check if cell is truly empty:
+        # 1. NaN (most common for numeric empty cells)
+        # 2. None
+        # 3. Empty string or whitespace-only string
+        # Note: We do NOT treat 0 as empty - it's a valid calculated value
+        is_empty = False
+        
+        if pd.isna(current_val):
+            is_empty = True
+        elif current_val is None:
+            is_empty = True
+        elif isinstance(current_val, str) and current_val.strip() == '':
+            is_empty = True
+        
+        if debug and idx == 0:  # Debug first row only
+            print(f"  {col_name}: current={current_val} (type={type(current_val).__name__}), is_empty={is_empty}, will_set={value}")
+        
+        if is_empty:
+            # If setting a string value to a numeric column, convert column to object dtype
+            if isinstance(value, str) and df[col_name].dtype in ['float64', 'int64']:
+                df[col_name] = df[col_name].astype('object')
+            
+            df.at[idx, col_name] = value
+            return True
+    return False
+
+def fill_empty_cells_with_formulas(df, info_df, rates_df, summary_df):
+    """
+    Fill empty cells in DATABASE sheet based on Excel formulas.
+    
+    This function processes each row and fills empty cells using the same
+    formulas that would be used in Excel, leveraging XLOOKUP and other functions.
+    
+    Args:
+        df: DataFrame from DATABASE sheet (to be filled)
+        info_df: DataFrame from Info sheet
+        rates_df: DataFrame from Hourly Rates sheet  
+        summary_df: DataFrame from Summary sheet
+        
+    Returns:
+        DataFrame with empty cells filled
+    """
+    print(f"Starting to fill empty cells for {len(df)} rows...")
+    print(f"Columns in DataFrame: {df.columns.tolist()}")
+    
+    # Create a copy to avoid modifying original
+    result_df = df.copy()
+    
+    # Find which column variations exist
+    col_north_south = find_column(result_df, 'North/South', 'North/\nSouth', 'North/ South')
+    col_currency = find_column(result_df, 'Currency')
+    col_ap_cb_subcon = find_column(result_df, 'AP-CB / \nSubcon')
+    col_ls_unit_rate = find_column(result_df, 'LS/Unit Rate')
+    col_hourly_base_rate = find_column(result_df, 'Hourly Base Rate')
+    col_hourly_additional_rate = find_column(result_df, 'Hourly Additional Rates', 'Hourly Additional Rate')
+    col_hourly_rate = find_column(result_df, 'Hourly Rate', 'Hourly\n Rate')
+    col_cost = find_column(result_df, 'Cost')
+    col_general_total_cost = find_column(result_df, 'General Total Cost (USD)', 'General Total\n Cost (USD)')
+    col_hourly_unit_rate_usd = find_column(result_df, 'Hourly Unit Rate (USD)')
+    col_no_1 = find_column(result_df, 'NO-1')
+    col_no_2 = find_column(result_df, 'NO-2')
+    col_no_3 = find_column(result_df, 'NO-3')
+    col_no_10 = find_column(result_df, 'NO-10')
+    col_isveren_birim_fiyat = find_column(result_df, 'İşveren-Hakediş Birim Fiyat')
+    col_isveren_hakedis = find_column(result_df, 'İşveren- Hakediş')
+    col_isveren_hakedis_usd = find_column(result_df, 'İşveren- Hakediş (USD)')
+    col_isveren_birim_fiyat_usd = find_column(result_df, 'İşveren-Hakediş Birim Fiyat\n(USD)', 'İşveren-Hakediş Birim Fiyat (USD)')
+    col_control_1 = find_column(result_df, 'Control-1')
+    col_tm_liste = find_column(result_df, 'TM Liste')
+    col_tm_kod = find_column(result_df, 'TM Kod')
+    col_kontrol_1 = find_column(result_df, 'Konrol-1', 'Kontrol-1')
+    col_kontrol_2 = find_column(result_df, 'Knrtol-2', 'Kontrol-2')
+    
+    print(f"Found columns - Currency: {col_currency}, Hourly Rate: {col_hourly_rate}, Cost: {col_cost}")
+    print(f"Found columns - NO-3: {col_no_3}, Kontrol-1: {col_kontrol_1}, Kontrol-2: {col_kontrol_2}")
+    print(f"All columns in DataFrame: {result_df.columns.tolist()}")
+    
+    # Process each row
+    for idx, row in result_df.iterrows():
+        if idx % 100 == 0:
+            print(f"Processing row {idx}...")
+        
+        # Extract base values (these should already exist in the file)
+        person_id = safe_float(row.get('ID', 0))
+        scope = safe_str(row.get('Scope', ''))
+        company = safe_str(row.get('Company', ''))
+        projects = safe_str(row.get('Projects', ''))
+        
+        # Handle different variations of Week/Month field
+        week_month = safe_str(row.get('(Week / Month)', '') or 
+                             row.get('(Week /\nMonth)', '') or
+                             row.get('Week / Month', '') or
+                             row.get('Week/Month', ''))
+        
+        # Handle different variations of TOTAL MH field
+        total_mh = safe_float(row.get('TOTAL MH', 0) or 
+                             row.get('TOTAL\n MH', 0) or
+                             row.get('Total MH', 0))
+        
+        kuzey_mh_person = safe_float(row.get('Kuzey MH-Person', 0))
+        
+        # Get İşveren fields if they exist
+        isveren_currency = safe_str(row.get('İşveren - Currency', '') or row.get('İşveren-Currency', ''))
+        
+        # ============================================================
+        # FORMULA 1: North/South = XLOOKUP($G,Info!$N:$N,Info!$Q:$Q)
+        # ============================================================
+        if col_north_south:
+            north_south = xlookup(scope, info_df.iloc[:, 13], info_df.iloc[:, 16], '')
+            set_if_empty(result_df, idx, col_north_south, north_south)
+        
+        # ============================================================
+        # FORMULA 2: Currency = IF(A=905264,"TL",XLOOKUP($A,'Hourly Rates'!$A:$A,'Hourly Rates'!$G:$G))
+        # ============================================================
+        if col_currency:
+            if person_id == 905264:
+                currency = 'TL'
+            else:
+                currency = xlookup(person_id, rates_df.iloc[:, 0], rates_df.iloc[:, 6], 'USD')
+            set_if_empty(result_df, idx, col_currency, currency)
+            currency = result_df.at[idx, col_currency]  # Get actual value (might not have been set)
+        else:
+            currency = 'USD'  # Default
+        
+        # ============================================================
+        # FORMULA 3: AP-CB/Subcon = IF(ISNUMBER(SEARCH("AP-CB", E)), "AP-CB", "Subcon")
+        # ============================================================
+       
+        if col_ap_cb_subcon:
+           ap_cb_subcon = 'AP-CB' if 'AP-CB' in company.upper() else 'Subcon'
+           set_if_empty(result_df, idx, col_ap_cb_subcon, ap_cb_subcon)
+
+    # Get actual value (might not have been set if cell already had data)
+           ap_cb_subcon = result_df.at[idx, col_ap_cb_subcon]
+        else:
+    # If column doesn't exist, calculate anyway for use in other formulas
+            ap_cb_subcon = 'AP-CB' if 'AP-CB' in company.upper() else 'Subcon'
+
+        
+        # ============================================================
+        # FORMULA 4: LS/Unit Rate
+        # ============================================================
+        if col_ls_unit_rate:
+            scope_has_lumpsum = 'lumpsum' in scope.lower() if scope else False
+            company_is_special = company in ['İ4', 'DEGENKOLB', 'Kilci Danışmanlık']
+            ls_unit_rate = 'Lumpsum' if (scope_has_lumpsum or company_is_special) else 'Unit Rate'
+            set_if_empty(result_df, idx, col_ls_unit_rate, ls_unit_rate)
+            ls_unit_rate = result_df.at[idx, col_ls_unit_rate]  # Get actual value (might not have been set)
+        else:
+            # If column doesn't exist, calculate anyway for use in other formulas
+            scope_has_lumpsum = 'lumpsum' in scope.lower() if scope else False
+            company_is_special = company in ['İ4', 'DEGENKOLB', 'Kilci Danışmanlık']
+            ls_unit_rate = 'Lumpsum' if (scope_has_lumpsum or company_is_special) else 'Unit Rate'
+        
+        # ============================================================
+        # FORMULA 5: Hourly Base Rate
+        # ============================================================
+        if ap_cb_subcon == 'Subcon' and ls_unit_rate == 'Unit Rate':
+            hourly_base_rate = safe_float(xlookup(person_id, rates_df.iloc[:, 0], rates_df.iloc[:, 9], 0))
+        else:
+            hourly_base_rate = safe_float(xlookup(person_id, rates_df.iloc[:, 0], rates_df.iloc[:, 7], 0))
+        
+        if idx == 0:
+            print(f"\n=== DEBUG ROW 0 - Hourly Base Rate ===")
+            print(f"  person_id: {person_id}")
+            print(f"  ap_cb_subcon: {ap_cb_subcon}, ls_unit_rate: {ls_unit_rate}")
+            print(f"  rates_df shape: {rates_df.shape}")
+            print(f"  rates_df columns: {rates_df.columns.tolist()}")
+            print(f"  First 3 IDs in rates: {rates_df.iloc[:3, 0].tolist()}")
+            print(f"  Column 7 (index 7) first 3 values: {rates_df.iloc[:3, 7].tolist()}")
+            print(f"  Column 9 (index 9) first 3 values: {rates_df.iloc[:3, 9].tolist()}")
+            print(f"  Calculated hourly_base_rate: {hourly_base_rate}")
+            print("=" * 50)
+        
+        if col_hourly_base_rate:
+            set_if_empty(result_df, idx, col_hourly_base_rate, hourly_base_rate, debug=(idx==0))
+            hourly_base_rate = safe_float(result_df.at[idx, col_hourly_base_rate])
+            
+            if idx == 0:
+                print(f"  Final hourly_base_rate after set: {hourly_base_rate}\n")
+        
+        # ============================================================
+        # FORMULA 6: Hourly Additional Rate
+        # ============================================================
+        if ls_unit_rate == 'Lumpsum':
+            hourly_additional_rate = 0
+        elif company == 'AP-CB' or company == 'AP-CB / pergel':
+            hourly_additional_rate = 0
+        else:
+            additional_base = safe_float(xlookup(person_id, rates_df.iloc[:, 0], rates_df.iloc[:, 11], 0))
+            if currency == 'USD':
+                hourly_additional_rate = additional_base
+            elif currency == 'TL':
+                tcmb_rate = safe_float(xlookup(week_month, info_df.iloc[:, 20], info_df.iloc[:, 22], 1))
+                hourly_additional_rate = additional_base * tcmb_rate
+            else:
+                hourly_additional_rate = 0
+        
+        if col_hourly_additional_rate:
+            set_if_empty(result_df, idx, col_hourly_additional_rate, hourly_additional_rate)
+            hourly_additional_rate = safe_float(result_df.at[idx, col_hourly_additional_rate])
+        
+        # ============================================================
+        # FORMULA 7: Hourly Rate = S + V
+        # ============================================================
+        hourly_rate = hourly_base_rate + hourly_additional_rate
+        if col_hourly_rate:
+            set_if_empty(result_df, idx, col_hourly_rate, hourly_rate)
+            hourly_rate = safe_float(result_df.at[idx, col_hourly_rate])
+        
+        # ============================================================
+        # FORMULA 8: Cost = Q * K
+        # ============================================================
+        cost = hourly_rate * total_mh
+        if col_cost:
+            set_if_empty(result_df, idx, col_cost, cost)
+            cost = safe_float(result_df.at[idx, col_cost])
+        
+        # ============================================================
+        # FORMULA 9: General Total Cost (USD)
+        # ============================================================
+        if currency == "TL":
+            tcmb_rate = safe_float(xlookup(week_month, info_df.iloc[:, 20], info_df.iloc[:, 22], 1))
+            general_total_cost_usd = cost / tcmb_rate if tcmb_rate != 0 else 0
+        elif currency == "EURO":
+            tcmb_eur_usd = safe_float(xlookup(week_month, info_df.iloc[:, 20], info_df.iloc[:, 23], 1))
+            general_total_cost_usd = cost * tcmb_eur_usd
+        else:
+            general_total_cost_usd = cost
+        
+        if col_general_total_cost:
+            set_if_empty(result_df, idx, col_general_total_cost, general_total_cost_usd)
+            general_total_cost_usd = safe_float(result_df.at[idx, col_general_total_cost])
+
+        
+        # ============================================================
+        # FORMULA 10: Hourly Unit Rate (USD)
+        # ============================================================
+        hourly_unit_rate_usd = general_total_cost_usd / total_mh if total_mh != 0 else 0
+        if col_hourly_unit_rate_usd:
+            set_if_empty(result_df, idx, col_hourly_unit_rate_usd, hourly_unit_rate_usd)
+            hourly_unit_rate_usd = 0
+        
+        # ============================================================
+        # Get NO-1, NO-2, NO-3, NO-10 for İşveren calculations
+        # ============================================================
+        no_1 = xlookup(scope, info_df.iloc[:, 46], info_df.iloc[:, 42], 0)
+        if col_no_1:
+            set_if_empty(result_df, idx, col_no_1, no_1)
+            no_1 = result_df.at[idx, col_no_1]
+        
+        no_2 = xlookup(scope, info_df.iloc[:, 13], info_df.iloc[:, 11], '')
+        if col_no_2:
+            set_if_empty(result_df, idx, col_no_2, no_2)
+            no_2 = result_df.at[idx, col_no_2]
+        
+        no_3 = xlookup(scope, info_df.iloc[:, 13], info_df.iloc[:, 12], '')
+        
+        if idx == 0:
+            print(f"\n=== DEBUG ROW 0 - NO-3 ===")
+            print(f"  col_no_3 column name: '{col_no_3}'")
+            print(f"  scope: {scope}")
+            print(f"  Calculated no_3: {no_3} (type: {type(no_3).__name__})")
+            if col_no_3:
+                print(f"  Current value at [0, '{col_no_3}']: {result_df.at[0, col_no_3]}")
+                print(f"  Column dtype: {result_df[col_no_3].dtype}")
+            print("=" * 50)
+        
+        if col_no_3:
+            # If no_3 is empty string and column is numeric, convert to NaN or 0
+            if no_3 == '' and result_df[col_no_3].dtype in ['float64', 'int64']:
+                no_3 = 0  # or use np.nan if you want NaN
+            set_if_empty(result_df, idx, col_no_3, no_3)
+            no_3 = result_df.at[idx, col_no_3]  # Read back the actual value
+        
+        no_10 = xlookup(no_1, info_df.iloc[:, 9], info_df.iloc[:, 10], '')
+        if col_no_10:
+            set_if_empty(result_df, idx, col_no_10, no_10)
+            no_10 = result_df.at[idx, col_no_10]  # Read back the actual value
+        
+        # ============================================================
+        # FORMULA 11: İşveren Hakediş Birim Fiyat
+        # ============================================================
+        no_1_num = safe_float(no_1, 0)
+        no_2_str = safe_str(no_2, '')
+        
+        if no_2_str in ['999-A', '999-C', '414-C'] or no_1_num == 313:
+            isveren_hakedis_birim_fiyat = hourly_rate
+        elif no_1_num in [312, 314, 316] or no_2_str == '360-T':
+            isveren_hakedis_birim_fiyat = hourly_rate * 1.02
+        elif no_2_str == '517-A':
+            isveren_hakedis_birim_fiyat = safe_float(xlookup(person_id, info_df.iloc[:, 28], info_df.iloc[:, 33], 0))
+        else:
+            if summary_df is not None:
+                val1 = safe_float(xlookup(no_1, summary_df.iloc[:, 2], summary_df.iloc[:, 26], 0))
+                val2 = safe_float(xlookup(no_2, summary_df.iloc[:, 2], summary_df.iloc[:, 26], 0))
+                isveren_hakedis_birim_fiyat = val1 + val2
+            else:
+                isveren_hakedis_birim_fiyat = 0
+        
+        if col_isveren_birim_fiyat:
+            set_if_empty(result_df, idx, col_isveren_birim_fiyat, isveren_hakedis_birim_fiyat)
+            isveren_hakedis_birim_fiyat = safe_float(result_df.at[idx, col_isveren_birim_fiyat])
+        
+        # ============================================================
+        # FORMULA 12: İşveren-Hakediş
+        # ============================================================
+        if kuzey_mh_person > 0:
+            isveren_hakedis = kuzey_mh_person * isveren_hakedis_birim_fiyat
+        else:
+            isveren_hakedis = isveren_hakedis_birim_fiyat * total_mh
+        
+        if col_isveren_hakedis:
+            set_if_empty(result_df, idx, col_isveren_hakedis, isveren_hakedis)
+            isveren_hakedis = safe_float(result_df.at[idx, col_isveren_hakedis])
+        
+        # ============================================================
+        # FORMULA 13: İşveren Hakediş (USD)
+        # ============================================================
+        if isveren_currency == 'EURO':
+            eur_usd_rate = safe_float(xlookup(week_month, info_df.iloc[:, 20], info_df.iloc[:, 23], 1))
+            isveren_hakedis_usd = isveren_hakedis * eur_usd_rate
+        else:
+            isveren_hakedis_usd = isveren_hakedis
+        
+        if col_isveren_hakedis_usd:
+            set_if_empty(result_df, idx, col_isveren_hakedis_usd, isveren_hakedis_usd)
+            isveren_hakedis_usd = safe_float(result_df.at[idx, col_isveren_hakedis_usd])
+        
+        # ============================================================
+        # FORMULA 14: İşveren Hakediş Birim Fiyatı (USD)
+        # ============================================================
+        if col_isveren_birim_fiyat_usd:
+            if kuzey_mh_person > 0:
+                isveren_hakedis_birim_fiyat_usd = isveren_hakedis_usd / kuzey_mh_person if kuzey_mh_person != 0 else 0
+            else:
+                isveren_hakedis_birim_fiyat_usd = isveren_hakedis_usd / total_mh if total_mh != 0 else 0
+            set_if_empty(result_df, idx, col_isveren_birim_fiyat_usd, isveren_hakedis_birim_fiyat_usd)
+        
+        # ============================================================
+        # FORMULA 15: Control-1
+        # ============================================================
+        if col_control_1:
+            control_1 = xlookup(projects, info_df.iloc[:, 14], info_df.iloc[:, 18], '')
+            set_if_empty(result_df, idx, col_control_1, control_1)
+        
+        # ============================================================
+        # FORMULA 16: TM Liste
+        # ============================================================
+        if col_tm_liste:
+            try:
+                tm_liste = xlookup(person_id, info_df.iloc[:, 58], info_df.iloc[:, 60], '')
+            except:
+                tm_liste = ''
+            set_if_empty(result_df, idx, col_tm_liste, tm_liste)
+        
+        # ============================================================
+        # FORMULA 17: TM KOD
+        # ============================================================
+        if col_tm_kod:
+            tm_kod = xlookup(projects, info_df.iloc[:, 14], info_df.iloc[:, 17], '')
+            set_if_empty(result_df, idx, col_tm_kod, tm_kod)
+        
+        # ============================================================
+        # FORMULA 18: Kontrol-1
+        # ============================================================
+        if col_kontrol_1:
+            kontrol_1 = xlookup(projects, info_df.iloc[:, 47], info_df.iloc[:, 42], '')
+            set_if_empty(result_df, idx, col_kontrol_1, kontrol_1)
+        
+        # ============================================================
+        # FORMULA 19: Kontrol-2
+        # ============================================================
+        kontrol_2_str = "FALSE"
+
+        if col_kontrol_2:
+            kontrol_1_val = (
+                result_df.at[idx, col_kontrol_1]
+                if col_kontrol_1 is not None
+                else ""
+
+            )
+            kontrol_2_str = "TRUE" if no_1 == kontrol_1_val else "FALSE"
+            
+            if idx == 0:
+                print(f"\n=== DEBUG ROW 0 - Kontrol-2 ===")
+                print(f"  col_kontrol_2 column name: '{col_kontrol_2}'")
+                print(f"  no_1: {no_1}")
+                print(f"  kontrol_1_val: {kontrol_1_val}")
+                print(f"  kontrol_2_str: {kontrol_2_str}")
+                print(f"  Current value at [{idx}, '{col_kontrol_2}']: {result_df.at[idx, col_kontrol_2]}")
+                print("=" * 50)
+            
+            # Check if current value is numeric 1 or 0 (from previous incorrect fill)
+            # If so, we should overwrite it with TRUE/FALSE
+            current = result_df.at[idx, col_kontrol_2]
+            should_overwrite = False
+            
+            if pd.isna(current):
+                should_overwrite = True
+            elif current in [0, 0.0, 1, 1.0]:
+                # Overwrite numeric values with proper TRUE/FALSE
+                should_overwrite = True
+            elif isinstance(current, str) and current.strip() == '':
+                should_overwrite = True
+            
+            if should_overwrite:
+                # Convert column to object dtype if needed
+                if result_df[col_kontrol_2].dtype in ['float64', 'int64']:
+                    result_df[col_kontrol_2] = result_df[col_kontrol_2].astype('object')
+                result_df.at[idx, col_kontrol_2] = kontrol_2_str
+    
+    print(f"Finished filling empty cells!")
+    return result_df
+
+
+@app.route('/api/process_empty_cells', methods=['POST'])
+@login_required
+def process_empty_cells():
+    """
+    Handle file upload with empty cells and fill them based on formulas.
+    This uses the Info, Hourly Rates, and Summary sheets from previously uploaded files.
+    """
+    try:
+        # Only admin can upload files
+        if session.get('role') != 'admin':
+            return jsonify({'error': 'Only admin can upload files'}), 403
+        
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file provided'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        # Check file extension
+        allowed_extensions = {'.xlsx', '.xls', '.xlsb'}
+        file_ext = os.path.splitext(file.filename)[1].lower()
+        if file_ext not in allowed_extensions:
+            return jsonify({'error': f'Invalid file type. Allowed: {", ".join(allowed_extensions)}'}), 400
+        
+        filename = secure_filename(file.filename)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'{timestamp}_{filename}'
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        
+        # Save file
+        print(f"Saving file to: {filepath}")
+        file.save(filepath)
+        print(f"File saved successfully")
+        
+        # Load the DATABASE sheet from uploaded file
+        print(f"Loading DATABASE sheet from uploaded file...")
+        if file_ext == '.xlsb':
+            df_database = pd.read_excel(filepath, sheet_name='DATABASE', engine='pyxlsb')
+        else:
+            df_database = pd.read_excel(filepath, sheet_name='DATABASE')
+        
+        print(f"DATABASE sheet loaded: {df_database.shape[0]} rows, {df_database.shape[1]} columns")
+        
+        # Load reference data (Info, Hourly Rates, Summary) from latest uploaded file
+        print(f"Loading reference sheets (Info, Hourly Rates, Summary)...")
+        if not load_excel_reference_data():
+            return jsonify({'error': 'Could not load reference sheets (Info, Hourly Rates, Summary). Please ensure you have uploaded a file with these sheets first.'}), 400
+        
+        info_df = _excel_cache['info_df']
+        rates_df = _excel_cache['hourly_rates_df']
+        summary_df = _excel_cache['summary_df']
+        
+        print(f"Reference sheets loaded:")
+        print(f"  - Info: {info_df.shape[0]} rows, {info_df.shape[1]} columns")
+        print(f"  - Hourly Rates: {rates_df.shape[0]} rows, {rates_df.shape[1]} columns")
+        print(f"  - Hourly Rates columns: {rates_df.columns.tolist()}")
+        print(f"  - Hourly Rates column 0 (ID) first 5: {rates_df.iloc[:5, 0].tolist()}")
+        print(f"  - Hourly Rates column 7 first 5: {rates_df.iloc[:5, 7].tolist()}")
+        if summary_df is not None:
+            print(f"  - Summary: {summary_df.shape[0]} rows, {summary_df.shape[1]} columns")
+        else:
+            print(f"  - Summary: Not available")
+        
+        # Fill empty cells based on formulas
+        print(f"Filling empty cells based on formulas...")
+        df_filled = fill_empty_cells_with_formulas(df_database, info_df, rates_df, summary_df)
+        
+        # Save the filled DataFrame back to Excel
+        output_filename = f'filled_{timestamp}_{os.path.basename(file.filename)}'
+        output_filepath = os.path.join(app.config['UPLOAD_FOLDER'], output_filename)
+        
+        print(f"Saving filled data to: {output_filepath}")
+        if file_ext == '.xlsb':
+            # For xlsb, we need to save as xlsx since pyxlsb doesn't support writing
+            output_filepath = output_filepath.replace('.xlsb', '.xlsx')
+            df_filled.to_excel(output_filepath, sheet_name='DATABASE', index=False, engine='openpyxl')
+        else:
+            df_filled.to_excel(output_filepath, sheet_name='DATABASE', index=False)
+        
+        print(f"Filled file saved successfully!")
+        
+        return jsonify({
+            'success': True,
+            'message': f'File processed successfully! {df_filled.shape[0]} rows processed.',
+            'original_file': filename,
+            'filled_file': output_filename,
+            'download_url': f'/api/download_filled/{output_filename}',
+            'rows': df_filled.shape[0],
+            'columns': df_filled.shape[1]
+        })
+    
+    except Exception as e:
+        print(f"Process empty cells error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/download_filled/<filename>')
+@login_required
+def download_filled(filename):
+    """Download the filled Excel file"""
+    try:
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        if not os.path.exists(filepath):
+            return jsonify({'error': 'File not found'}), 404
+        
+        return send_file(filepath, as_attachment=True, download_name=filename)
+    except Exception as e:
+        print(f"Download error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/filter', methods=['POST'])
 @login_required
 def filter_data():
@@ -2145,6 +2737,115 @@ def get_filtered_options():
         print(f'ERROR in get_filtered_options: {e}')
         import traceback
         traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/save-filter', methods=['POST'])
+@login_required
+def save_filter():
+    """Save filter configuration for user"""
+    try:
+        data = request.json
+        filter_name = data.get('filter_name')
+        filter_type = data.get('filter_type')  # 'database', 'pivot', 'graph'
+        filter_config = data.get('filter_config')
+        
+        if not filter_name or not filter_type or not filter_config:
+            return jsonify({'error': 'Missing required fields'}), 400
+        
+        user_id = session.get('user_id')
+        
+        # Check if filter with same name and type exists for this user
+        existing = SavedFilter.query.filter_by(
+            user_id=user_id,
+            filter_name=filter_name,
+            filter_type=filter_type
+        ).first()
+        
+        if existing:
+            # Update existing filter
+            existing.filter_config = json.dumps(filter_config)
+            existing.updated_at = datetime.utcnow()
+        else:
+            # Create new filter
+            new_filter = SavedFilter(
+                user_id=user_id,
+                filter_name=filter_name,
+                filter_type=filter_type,
+                filter_config=json.dumps(filter_config)
+            )
+            db.session.add(new_filter)
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Filter saved successfully'
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/load-filters', methods=['GET'])
+@login_required
+def load_filters():
+    """Load saved filters for user"""
+    try:
+        filter_type = request.args.get('filter_type')
+        user_id = session.get('user_id')
+        
+        query = SavedFilter.query.filter_by(user_id=user_id)
+        
+        if filter_type:
+            query = query.filter_by(filter_type=filter_type)
+        
+        filters = query.order_by(SavedFilter.updated_at.desc()).all()
+        
+        result = []
+        for f in filters:
+            result.append({
+                'id': f.id,
+                'filter_name': f.filter_name,
+                'filter_type': f.filter_type,
+                'filter_config': json.loads(f.filter_config),
+                'created_at': f.created_at.isoformat(),
+                'updated_at': f.updated_at.isoformat()
+            })
+        
+        return jsonify({
+            'success': True,
+            'filters': result
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/delete-filter/<int:filter_id>', methods=['DELETE'])
+@login_required
+def delete_filter(filter_id):
+    """Delete saved filter"""
+    try:
+        user_id = session.get('user_id')
+        
+        # Only allow user to delete their own filters
+        saved_filter = SavedFilter.query.filter_by(
+            id=filter_id,
+            user_id=user_id
+        ).first()
+        
+        if not saved_filter:
+            return jsonify({'error': 'Filter not found'}), 404
+        
+        db.session.delete(saved_filter)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Filter deleted successfully'
+        })
+        
+    except Exception as e:
+        db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/pivot', methods=['POST'])

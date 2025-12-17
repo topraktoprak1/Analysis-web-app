@@ -89,6 +89,44 @@
                         </div>
                     </div>
                     
+                    <!-- Fill Empty Cells Section -->
+                    <div class="card shadow mb-4">
+                        <div class="card-header py-3">
+                            <h6 class="m-0 font-weight-bold text-success">🔧 Fill Empty Cells with Formulas</h6>
+                        </div>
+                        <div class="card-body">
+                            <input type="file" id="emptyCellsFileInput" accept=".xlsx,.xls,.xlsb" style="display: none;">
+                            <div class="d-flex gap-2 align-items-center">
+                                <button class="btn btn-success" onclick="document.getElementById('emptyCellsFileInput').click()">
+                                    <i class="fas fa-file-excel"></i> Upload File with Empty Cells
+                                </button>
+                                <div id="processingSpinner" class="spinner-border spinner-border-sm text-success" role="status" style="display: none;">
+                                    <span class="visually-hidden">Processing...</span>
+                                </div>
+                                <span id="processStatus" class="text-muted"></span>
+                            </div>
+                            <div class="mt-2">
+                                <p class="text-muted mb-1">Upload an Excel file (xlsx/xlsb) with a DATABASE sheet containing empty cells.</p>
+                                <p class="text-muted small mb-1"><strong>How it works:</strong></p>
+                                <ul class="text-muted small">
+                                    <li>The system will fill empty cells based on Excel formulas (XLOOKUP, IF, etc.)</li>
+                                    <li>Reference data (Info, Hourly Rates, Summary sheets) is loaded from previously uploaded files</li>
+                                    <li>A new file with filled cells will be generated and available for download</li>
+                                </ul>
+                                <p class="text-muted small"><strong>Formulas applied:</strong> North/South, Currency, Hourly Rate, Cost, General Total Cost, İşveren calculations, and more.</p>
+                            </div>
+                            <div id="downloadSection" class="mt-3" style="display: none;">
+                                <div class="alert alert-success">
+                                    <i class="fas fa-check-circle"></i> <strong>Processing complete!</strong>
+                                    <p class="mb-0 mt-2">Your file has been processed successfully.</p>
+                                </div>
+                                <button id="downloadBtn" class="btn btn-primary" onclick="downloadFilledFile()">
+                                    <i class="fas fa-download"></i> Download Filled File
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    
                     <!-- Data Preview Section -->
                     <div class="card shadow mb-4" id="dataPreviewCard" style="display: none;">
                         <div class="card-header py-3 d-flex justify-content-between align-items-center">
@@ -104,43 +142,6 @@
                                     <tbody id="previewBody"></tbody>
                                 </table>
                             </div>
-                        </div>
-                    </div>
-                    
-                    <!-- Add New Record -->
-                    <div class="card shadow mb-4">
-                        <div class="card-header py-3">
-                            <h6 class="m-0 font-weight-bold text-primary">➕ Add New Record</h6>
-                            <small class="text-muted">
-                                Enter your data and click <strong>Add Record</strong>. The system will automatically calculate 
-                                fields like North/South, Currency, Hourly Rate, Cost, etc. If any calculations fail, 
-                                you'll be prompted to enter those values manually before saving.
-                            </small>
-                        </div>
-                        <div class="card-body">
-                            <div id="formLoadingMsg">
-                                <div class="text-center p-4">
-                                    <div class="spinner-border text-primary" role="status">
-                                        <span class="visually-hidden">Loading...</span>
-                                    </div>
-                                    <p class="mt-2">Loading form fields...</p>
-                                </div>
-                            </div>
-                            <form id="addRecordForm" style="display:none;">
-                                <div class="row g-3" id="formFieldsContainer">
-                                    <!-- Fields will be dynamically generated -->
-                                </div>
-                                <div class="row g-3 mt-2">
-                                    <div class="col-12">
-                                        <button type="submit" class="btn btn-primary">
-                                            <i class="fas fa-plus"></i> Add Record
-                                        </button>
-                                        <button type="reset" class="btn btn-secondary">
-                                            <i class="fas fa-undo"></i> Reset
-                                        </button>
-                                    </div>
-                                </div>
-                            </form>
                         </div>
                     </div>
                     
@@ -197,218 +198,13 @@
         </div>
     </div>
     
-    <!-- N/A Values Modal -->
-    <div class="modal fade" id="naValuesModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
-        <div class="modal-dialog modal-lg">
-            <div class="modal-content">
-                <div class="modal-header bg-warning text-dark">
-                    <h5 class="modal-title">
-                        <i class="fas fa-exclamation-triangle"></i> Missing Values Detected
-                    </h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <p class="alert alert-warning">
-                        <strong>Auto-calculation failed for some fields.</strong><br>
-                        Please provide values for the following fields to complete the record:
-                    </p>
-                    <form id="naValuesForm">
-                        <div class="row g-3" id="naFieldsContainer">
-                            <!-- N/A fields will be inserted here -->
-                        </div>
-                    </form>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-primary" onclick="submitWithManualValues()">
-                        <i class="fas fa-save"></i> Save Record
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-    
     <script src="{{ url_for('static', filename='bootstrap/js/bootstrap.min.js') }}"></script>
     <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
     
     <script>
-        let inputFields = [];
-        let calculatedFields = [];
-        
-        // Load input fields and generate form
-        async function loadFormFields() {
-            try {
-                const response = await fetch('/api/get-input-fields');
-                const result = await response.json();
-                
-                if (result.success) {
-                    inputFields = result.input_fields;
-                    calculatedFields = result.calculated_fields;
-                    generateFormFields();
-                } else {
-                    document.getElementById('formLoadingMsg').innerHTML = 
-                        '<div class="alert alert-warning">Could not load form fields. Using default fields.</div>';
-                    generateDefaultForm();
-                }
-            } catch (error) {
-                console.error('Error loading form fields:', error);
-                document.getElementById('formLoadingMsg').innerHTML = 
-                    '<div class="alert alert-danger">Error loading form fields: ' + error.message + '</div>';
-            }
-        }
-        
-        function generateFormFields() {
-            const container = document.getElementById('formFieldsContainer');
-            const form = document.getElementById('addRecordForm');
-            const loadingMsg = document.getElementById('formLoadingMsg');
-            
-            // Priority fields that should come first
-            const priorityFields = ['Name Surname', 'PERSONEL', 'Emp No', '(Week / Month)', 'Week / Month', 
-                                    'Status', 'Office Location', 'Total Hours', 'TOTAL MH', 'Huzey MH', 
-                                    'Company', 'Projects', 'Projects/Group', 'Discipline', 'Scope'];
-            
-            // Separate priority and other fields
-            const priority = inputFields.filter(f => priorityFields.includes(f));
-            const others = inputFields.filter(f => !priorityFields.includes(f));
-            const sortedFields = [...priority, ...others];
-            
-            let html = '';
-            
-            sortedFields.forEach(field => {
-                const fieldId = field.replace(/[^a-zA-Z0-9]/g, '_');
-                const isRequired = ['Name Surname', 'PERSONEL'].includes(field);
-                const isNumber = field.toLowerCase().includes('hours') || 
-                                 field.toLowerCase().includes('rate') || 
-                                 field.toLowerCase().includes('cost') ||
-                                 field.toLowerCase().includes('value');
-                
-                html += `
-                    <div class="col-md-4">
-                        <label class="form-label">${field}${isRequired ? ' *' : ''}</label>
-                        ${isNumber ? 
-                            `<input type="number" class="form-control" name="${field}" id="${fieldId}" step="0.01" ${isRequired ? 'required' : ''}>` :
-                            `<input type="text" class="form-control" name="${field}" id="${fieldId}" ${isRequired ? 'required' : ''}>`
-                        }
-                    </div>
-                `;
-            });
-            
-            container.innerHTML = html;
-            
-            // Show form and hide loading message
-            form.style.display = 'block';
-            loadingMsg.style.display = 'none';
-            
-            // Setup auto-fill and suggestions
-            setupAutoFill();
-            setupSuggestions();
-        }
-        
-        function setupSuggestions() {
-            // Add ID field listener for suggestions
-            const idField = document.getElementById('ID');
-            if (idField) {
-                idField.addEventListener('blur', async function() {
-                    const id = this.value.trim();
-                    if (!id) return;
-                    
-                    try {
-                        const response = await fetch(`/api/get-person-suggestions?id=${encodeURIComponent(id)}`);
-                        if (response.ok) {
-                            const result = await response.json();
-                            if (result.success && result.suggestions) {
-                                const sugg = result.suggestions;
-                                
-                                // Show suggestions
-                                if (sugg.found && sugg.info_data) {
-                                    let message = '✓ Person found! ';
-                                    if (sugg.info_data.Name) {
-                                        message += `Name: ${sugg.info_data.Name}`;
-                                        // Auto-fill name if empty
-                                        const nameField = document.getElementById('Name_Surname');
-                                        if (nameField && !nameField.value) {
-                                            nameField.value = sugg.info_data.Name;
-                                        }
-                                    }
-                                    showAlert(message, 'success');
-                                }
-                                
-                                // Show historical suggestions
-                                if (sugg.suggestions && sugg.suggestions.length > 0) {
-                                    const suggText = sugg.suggestions.join('\\n');
-                                    console.log('Suggestions:', suggText);
-                                }
-                            }
-                        }
-                    } catch (error) {
-                        console.log('Suggestions error:', error);
-                    }
-                });
-            }
-        }
-        
-        function generateDefaultForm() {
-            // Fallback if API fails
-            const container = document.getElementById('formFieldsContainer');
-            container.innerHTML = `
-                <div class="col-md-4">
-                    <label class="form-label">Name Surname (PERSONEL) *</label>
-                    <input type="text" class="form-control" name="Name Surname" id="Name_Surname" required>
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">(Week / Month) *</label>
-                    <input type="text" class="form-control" name="(Week / Month)" required>
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">Total Hours</label>
-                    <input type="number" class="form-control" name="Total Hours" step="0.01">
-                </div>
-            `;
-            document.getElementById('addRecordForm').style.display = 'block';
-            document.getElementById('formLoadingMsg').style.display = 'none';
-        }
-        
-        function setupAutoFill() {
-            const nameInput = document.getElementById('Name_Surname');
-            if (!nameInput) return;
-            
-            let debounceTimer;
-            nameInput.addEventListener('input', function(e) {
-                clearTimeout(debounceTimer);
-                
-                const name = e.target.value.trim();
-                if (name.length < 3) return;
-                
-                debounceTimer = setTimeout(async () => {
-                    try {
-                        const response = await fetch(`/api/get-person-info?name=${encodeURIComponent(name)}`);
-                        if (response.ok) {
-                            const result = await response.json();
-                            if (result.success && result.data) {
-                                const data = result.data;
-                                
-                                // Fill available fields
-                                Object.keys(data).forEach(key => {
-                                    const fieldId = key.replace(/[^a-zA-Z0-9]/g, '_');
-                                    const field = document.getElementById(fieldId);
-                                    if (field && data[key]) {
-                                        field.value = data[key];
-                                    }
-                                });
-                                
-                                showAlert('Auto-filled data from Excel!', 'info');
-                            }
-                        }
-                    } catch (error) {
-                        console.log('Auto-fill error:', error);
-                    }
-                }, 800);
-            });
-        }
         
         // Load records on page load
         document.addEventListener('DOMContentLoaded', function() {
-            loadFormFields();
             
             // Initialize search input handlers
             const searchInput = document.getElementById('recordsSearch');
@@ -619,152 +415,6 @@
                     }
                 }, 800);
             });
-        }
-        
-        // Handle form submission
-        document.getElementById('addRecordForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            
-            const formData = new FormData(e.target);
-            const record = {};
-            formData.forEach((value, key) => {
-                if (value) record[key] = value;
-            });
-            
-            // Ensure PERSONEL field is set from Name Surname
-            if (record['Name Surname']) {
-                record['PERSONEL'] = record['Name Surname'];
-            }
-            
-            // Validate before submitting
-            try {
-                const validateResponse = await fetch('/api/validate-record', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({record})
-                });
-                
-                const validateResult = await validateResponse.json();
-                
-                if (validateResult.success) {
-                    // Show errors if any
-                    if (validateResult.errors && validateResult.errors.length > 0) {
-                        showAlert('Errors: ' + validateResult.errors.join(', '), 'danger');
-                        return;
-                    }
-                    
-                    // Show warnings if any
-                    if (validateResult.warnings && validateResult.warnings.length > 0) {
-                        const warningMsg = 'Warnings:\\n' + validateResult.warnings.join('\\n') + '\\n\\nDo you want to continue?';
-                        if (!confirm(warningMsg)) {
-                            return;
-                        }
-                    }
-                }
-            } catch (error) {
-                console.log('Validation error:', error);
-            }
-            
-            // Submit the record
-            try {
-                const response = await fetch('/api/add-record', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({record})
-                });
-                
-                const result = await response.json();
-                
-                // Check if there are N/A fields that need manual input
-                if (response.status === 202 && result.na_fields) {
-                    // Store the original record data for later
-                    window.pendingRecord = record;
-                    // Show modal for N/A values
-                    showNAModal(result.na_fields);
-                    return;
-                }
-                
-                if (result.success) {
-                    showAlert('Record added successfully! Calculated fields have been automatically computed.', 'success');
-                    e.target.reset();
-                    loadRecords();
-                } else {
-                    showAlert(result.error || 'Failed to add record', 'danger');
-                }
-            } catch (error) {
-                showAlert('Error: ' + error.message, 'danger');
-            }
-        });
-        
-        // Show N/A values modal
-        function showNAModal(naFields) {
-            const container = document.getElementById('naFieldsContainer');
-            let html = '';
-            
-            naFields.forEach(field => {
-                const fieldId = field.replace(/[^a-zA-Z0-9]/g, '_') + '_manual';
-                const isNumber = field.toLowerCase().includes('rate') || 
-                                 field.toLowerCase().includes('cost') ||
-                                 field.toLowerCase().includes('no-');
-                
-                html += `
-                    <div class="col-md-6">
-                        <label class="form-label fw-bold">${field}</label>
-                        ${isNumber ? 
-                            `<input type="number" class="form-control" id="${fieldId}" name="${field}" step="0.01" placeholder="Enter value">` :
-                            `<input type="text" class="form-control" id="${fieldId}" name="${field}" placeholder="Enter value">`
-                        }
-                    </div>
-                `;
-            });
-            
-            container.innerHTML = html;
-            
-            // Show the modal
-            const modal = new bootstrap.Modal(document.getElementById('naValuesModal'));
-            modal.show();
-        }
-        
-        // Submit record with manual values
-        async function submitWithManualValues() {
-            const form = document.getElementById('naValuesForm');
-            const formData = new FormData(form);
-            const manualValues = {};
-            
-            formData.forEach((value, key) => {
-                if (value && value.trim()) {
-                    manualValues[key] = value;
-                }
-            });
-            
-            // Get the original record data
-            const record = window.pendingRecord;
-            
-            try {
-                const response = await fetch('/api/add-record', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        record: record,
-                        manual_values_provided: true,
-                        manual_values: manualValues
-                    })
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    // Hide modal
-                    bootstrap.Modal.getInstance(document.getElementById('naValuesModal')).hide();
-                    showAlert('Record added successfully with manual values!', 'success');
-                    document.getElementById('addRecordForm').reset();
-                    loadRecords();
-                } else {
-                    showAlert(result.error || 'Failed to add record', 'danger');
-                }
-            } catch (error) {
-                showAlert('Error: ' + error.message, 'danger');
-            }
         }
         
         // Pagination state
@@ -1012,6 +662,73 @@
                 e.target.value = '';
             }
         });
+        
+        // Handle empty cells file upload
+        let downloadUrl = null;
+        document.getElementById('emptyCellsFileInput').addEventListener('change', async function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            const spinner = document.getElementById('processingSpinner');
+            const status = document.getElementById('processStatus');
+            const downloadSection = document.getElementById('downloadSection');
+            
+            // Show processing state
+            spinner.style.display = 'inline-block';
+            status.textContent = 'Processing file...';
+            downloadSection.style.display = 'none';
+            
+            try {
+                const response = await fetch('/api/process_empty_cells', {
+                    method: 'POST',
+                    body: formData,
+                    credentials: 'same-origin'
+                });
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Server error: ${response.status} - ${errorText}`);
+                }
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    status.textContent = `Success! Processed ${result.rows} rows with ${result.columns} columns.`;
+                    status.classList.remove('text-muted');
+                    status.classList.add('text-success');
+                    
+                    // Show download section
+                    downloadUrl = result.download_url;
+                    downloadSection.style.display = 'block';
+                    
+                    showAlert(result.message || 'File processed successfully!', 'success');
+                } else {
+                    status.textContent = 'Processing failed';
+                    status.classList.remove('text-muted');
+                    status.classList.add('text-danger');
+                    showAlert(result.error || 'Processing failed', 'danger');
+                }
+            } catch (error) {
+                console.error('Processing error:', error);
+                status.textContent = 'Error occurred';
+                status.classList.remove('text-muted');
+                status.classList.add('text-danger');
+                showAlert('Error processing file: ' + error.message, 'danger');
+            } finally {
+                spinner.style.display = 'none';
+                // Reset file input
+                e.target.value = '';
+            }
+        });
+        
+        function downloadFilledFile() {
+            if (downloadUrl) {
+                window.location.href = downloadUrl;
+            }
+        }
         
         function showAlert(message, type) {
             const alertHtml = `

@@ -25,7 +25,7 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/veri_analizi
       FLASK_ENV: production
     ports:
-      - "127.0.0.1:5000:5000"
+      - "5000:5000"
     depends_on:
       db:
         condition: service_healthy

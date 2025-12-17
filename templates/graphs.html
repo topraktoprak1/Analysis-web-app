@@ -539,9 +539,11 @@
                 return false;
             }
             
-            // Get active filters from sessionStorage
-            const storedFilters = sessionStorage.getItem('activeFilters');
+            // Get active filters from sessionStorage (use 'currentFilters' which is what we save)
+            const storedFilters = sessionStorage.getItem('currentFilters');
             const filters = storedFilters ? JSON.parse(storedFilters) : null;
+            
+            console.log('Generating chart with filters:', filters); // Debug log
             
             // Show loading indicator
             const chartDiv = document.getElementById(`chart_${chartIndex}`);
@@ -1021,6 +1023,9 @@
                 currentFilters[column].push(cb.value);
             });
             
+            // Save filters to sessionStorage so they're used when generating charts
+            sessionStorage.setItem('currentFilters', JSON.stringify(currentFilters));
+            
             // Apply cascading filter
             try {
                 const response = await fetch('/api/get-filtered-options', {
@@ -1067,6 +1072,10 @@
         
         function resetGraphFilters() {
             resetAllFiltersGlobally();
+            
+            // Clear sessionStorage filters for charts
+            sessionStorage.setItem('currentFilters', JSON.stringify({}));
+            currentFilters = {};
             
             filterColumns.forEach(col => {
                 updateGraphFilterCount(col.name);
