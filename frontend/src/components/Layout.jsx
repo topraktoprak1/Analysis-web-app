@@ -4,11 +4,11 @@ import Sidebar from './Sidebar'
 
 function Layout() {
   return (
-    <div className="d-flex flex-column" style={{ height: '100vh' }}>
+    <div className="flex h-screen flex-col bg-whiten">
       <Navbar />
-      <div className="d-flex flex-grow-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden">
         <Sidebar />
-        <main className="flex-grow-1 overflow-auto p-4">
+        <main className="flex-1 overflow-auto p-6 lg:p-8">
           <Outlet />
         </main>
       </div>

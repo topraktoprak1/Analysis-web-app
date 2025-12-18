@@ -2,92 +2,49 @@ import { useState, useEffect } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import { useNavigate, Link } from 'react-router-dom'
 import { login, clearError } from '../store/slices/authSlice'
-import { Container, Row, Col, Card, Form, Button, Alert } from 'react-bootstrap'
 
 function Login() {
   const dispatch = useDispatch()
   const navigate = useNavigate()
   const { loading, error } = useSelector((state) => state.auth)
 
-  const [formData, setFormData] = useState({
-    username: '',
-    password: ''
-  })
+  const [formData, setFormData] = useState({ username: '', password: '' })
 
-  useEffect(() => {
-    return () => {
-      dispatch(clearError())
-    }
-  }, [dispatch])
+  useEffect(() => () => dispatch(clearError()), [dispatch])
 
-  const handleChange = (e) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value
-    })
-  }
+  const handleChange = (e) => setFormData({ ...formData, [e.target.name]: e.target.value })
 
   const handleSubmit = async (e) => {
     e.preventDefault()
     const result = await dispatch(login(formData))
-    if (login.fulfilled.match(result)) {
-      navigate('/')
-    }
+    if (login.fulfilled.match(result)) navigate('/')
   }
 
   return (
-    <Container fluid className="vh-100 d-flex align-items-center justify-content-center bg-light">
-      <Row className="w-100">
-        <Col md={6} lg={4} className="mx-auto">
-          <Card>
-            <Card.Body className="p-5">
-              <h2 className="text-center mb-4">Database Analysis System</h2>
-              <h4 className="text-center mb-4">Login</h4>
-              
-              {error && <Alert variant="danger">{error}</Alert>}
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="w-full max-w-md bg-white rounded shadow p-6">
+        <h2 className="text-center text-xl font-bold mb-2">Database Analysis System</h2>
+        <h3 className="text-center text-sm text-gray-500 mb-4">Login</h3>
 
-              <Form onSubmit={handleSubmit}>
-                <Form.Group className="mb-3">
-                  <Form.Label>Username</Form.Label>
-                  <Form.Control
-                    type="text"
-                    name="username"
-                    value={formData.username}
-                    onChange={handleChange}
-                    required
-                    autoFocus
-                  />
-                </Form.Group>
+        {error && <div className="mb-3 text-sm text-red-600">{error}</div>}
 
-                <Form.Group className="mb-3">
-                  <Form.Label>Password</Form.Label>
-                  <Form.Control
-                    type="password"
-                    name="password"
-                    value={formData.password}
-                    onChange={handleChange}
-                    required
-                  />
-                </Form.Group>
+        <form onSubmit={handleSubmit}>
+          <div className="mb-3">
+            <label className="block text-sm text-gray-600">Username</label>
+            <input name="username" value={formData.username} onChange={handleChange} required autoFocus className="mt-1 w-full rounded border px-3 py-2" />
+          </div>
+          <div className="mb-4">
+            <label className="block text-sm text-gray-600">Password</label>
+            <input name="password" type="password" value={formData.password} onChange={handleChange} required className="mt-1 w-full rounded border px-3 py-2" />
+          </div>
+          <button type="submit" disabled={loading} className="w-full bg-indigo-600 text-white py-2 rounded">{loading ? 'Logging in...' : 'Login'}</button>
+        </form>
 
-                <Button
-                  variant="primary"
-                  type="submit"
-                  className="w-100"
-                  disabled={loading}
-                >
-                  {loading ? 'Logging in...' : 'Login'}
-                </Button>
-              </Form>
-
-              <div className="text-center mt-3">
-                <Link to="/register">Don't have an account? Register</Link>
-              </div>
-            </Card.Body>
-          </Card>
-        </Col>
-      </Row>
-    </Container>
+        <div className="text-center mt-4 text-sm">
+          <Link to="/register" className="text-indigo-600">Don't have an account? Register</Link>
+        </div>
+      </div>
+    </div>
   )
 }
 

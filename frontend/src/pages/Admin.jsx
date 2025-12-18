@@ -1,33 +1,29 @@
-import { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import { fetchRecords, deleteRecord } from '../store/slices/dataSlice'
-import { Container, Row, Col, Card, Table, Button, Badge, Alert, Form, Spinner } from 'react-bootstrap'
 import api from '../services/api'
 
 function Admin() {
   const dispatch = useDispatch()
   const { records, loading, pagination } = useSelector((state) => state.data)
-  const [currentPage, setCurrentPage] = useState(1)
+  const safeRecords = Array.isArray(records) ? records : []
   const [uploadFile, setUploadFile] = useState(null)
   const [uploading, setUploading] = useState(false)
   const [uploadMessage, setUploadMessage] = useState(null)
-  const [searchTerm, setSearchTerm] = useState('')
   const fileInputRef = useRef(null)
 
   useEffect(() => {
-    dispatch(fetchRecords({ page: currentPage, per_page: 10, search: searchTerm }))
-  }, [dispatch, currentPage])
+    dispatch(fetchRecords({ page: 1, per_page: 10 }))
+  }, [dispatch])
 
-  const handleDelete = async (id) => {
-    if (window.confirm('Are you sure you want to delete this record?')) {
-      await dispatch(deleteRecord(id))
-      dispatch(fetchRecords({ page: currentPage, per_page: 10 }))
-    }
+  const handleFileChange = (e) => {
+    const f = e.target.files[0]
+    if (f) setUploadFile(f)
   }
 
-  const handleFileUpload = async () => {
+  const handleUpload = async () => {
     if (!uploadFile) {
-      setUploadMessage({ type: 'danger', text: 'Please select a file' })
+      setUploadMessage({ type: 'error', text: 'Please select a file' })
       return
     }
 
@@ -38,251 +34,141 @@ function Admin() {
     setUploadMessage(null)
 
     try {
-      const response = await api.post('/api/upload', formData, {
+      const res = await api.post('/api/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       })
-      
-      setUploadMessage({ 
-        type: 'success', 
-        text: `File uploaded successfully! ${response.data.record_count || 0} records added.` 
-      })
-      
+      setUploadMessage({ type: 'success', text: `Uploaded: ${res.data.record_count || 0} records added.` })
       setUploadFile(null)
-      if (fileInputRef.current) {
-        fileInputRef.current.value = ''
-      }
-      
+      if (fileInputRef.current) fileInputRef.current.value = ''
       dispatch(fetchRecords({ page: 1, per_page: 10 }))
     } catch (err) {
-      setUploadMessage({ 
-        type: 'danger', 
-        text: err.response?.data?.error || 'Upload failed' 
-      })
+      setUploadMessage({ type: 'error', text: err.response?.data?.error || 'Upload failed' })
     } finally {
       setUploading(false)
     }
   }
 
   const handleClearDatabase = async () => {
-    if (!window.confirm('Are you sure you want to clear the entire database? This cannot be undone!')) {
-      return
-    }
-
+    if (!window.confirm('Clear entire database? This cannot be undone.')) return
     try {
       await api.post('/api/clear-database')
-      setUploadMessage({ type: 'success', text: 'Database cleared successfully!' })
+      setUploadMessage({ type: 'success', text: 'Database cleared.' })
       dispatch(fetchRecords({ page: 1, per_page: 10 }))
     } catch (err) {
-      setUploadMessage({ type: 'danger', text: 'Failed to clear database' })
+      setUploadMessage({ type: 'error', text: 'Failed to clear database' })
     }
   }
 
+  const handleDelete = async (id) => {
+    if (!window.confirm('Delete this record?')) return
+    await dispatch(deleteRecord(id))
+    dispatch(fetchRecords({ page: 1, per_page: 10 }))
+  }
+
   return (
-    <Container fluid className="py-3">
-      <Row className="mb-3">
-        <Col>
-          <h2>⚙️ Admin Panel</h2>
-        </Col>
-      </Row>
-
-      {/* Upload Excel Database */}
-      <Card className="mb-4 border-0 shadow-sm">
-        <Card.Header className="bg-warning text-dark">
-          <i className="bi bi-folder-plus me-2"></i>
-          <strong>Upload Excel Database</strong>
-        </Card.Header>
-        <Card.Body>
-          <Row className="mb-3">
-            <Col md={8}>
-              <Button variant="primary" className="me-2" onClick={() => fileInputRef.current?.click()}>
-                <i className="bi bi-file-earmark me-1"></i>
-                Choose Excel File
-              </Button>
-              <Button 
-                variant="danger"
-                onClick={handleClearDatabase}
-              >
-                <i className="bi bi-trash me-1"></i>
-                Clear Database
-              </Button>
-              <div className="mt-2">
-                <Badge bg="secondary">{pagination.total || 0} records in database</Badge>
-              </div>
-            </Col>
-          </Row>
-
-          <Form.Control
-            type="file"
-            ref={fileInputRef}
-            accept=".xlsx,.xls,.xlsb"
-            onChange={(e) => setUploadFile(e.target.files[0])}
-            style={{ display: 'none' }}
-          />
-
-          {uploadFile && (
-            <Alert variant="info" className="mb-3">
-              Selected: <strong>{uploadFile.name}</strong>
-              <Button 
-                size="sm" 
-                variant="success" 
-                className="ms-3"
-                onClick={handleFileUpload}
-                disabled={uploading}
-              >
-                {uploading ? 'Uploading...' : 'Upload Now'}
-              </Button>
-            </Alert>
-          )}
-
-          {uploadMessage && (
-            <Alert variant={uploadMessage.type} dismissible onClose={() => setUploadMessage(null)}>
-              {uploadMessage.text}
-            </Alert>
-          )}
-
-          <Alert variant="secondary" className="mb-0">
-            <small>
-              <strong>Note:</strong> Uploading a new file will ADD records to the existing database. 
-              Use "Clear Database" to remove old data first.
-            </small>
-          </Alert>
-        </Card.Body>
-      </Card>
-
-      {/* Fill Empty Cells with Formulas */}
-      <Card className="mb-4 border-0 shadow-sm">
-        <Card.Header className="bg-success text-white">
-          <i className="bi bi-calculator me-2"></i>
-          <strong>Fill Empty Cells with Formulas</strong>
-        </Card.Header>
-        <Card.Body>
-          <Button variant="success" className="me-2">
-            <i className="bi bi-upload me-1"></i>
-            Upload File with Empty Cells
-          </Button>
-          <Alert variant="info" className="mt-3 mb-0">
-            <strong>How it works:</strong>
-            <ul className="mb-0 mt-2">
-              <li>The system will fill empty cells based on Excel formulas (XLOOKUP, IF, etc.)</li>
-              <li>Reference data (Info, Hourly Rates, Summary sheets) is loaded from previously uploaded files</li>
-              <li>A new file with filled cells will be generated and available for download</li>
-            </ul>
-            <p className="mt-2 mb-0">
-              <strong>Formulas applied:</strong> North/South, Currency, Hourly Rate, Cost, General Total Cost, İşveren calculations, and more.
-            </p>
-          </Alert>
-        </Card.Body>
-      </Card>
-
-      {/* Database Records */}
-      <Card className="mb-4 border-0 shadow-sm">
-        <Card.Header className="bg-light d-flex justify-content-between align-items-center">
-          <div>
-            <i className="bi bi-database me-2"></i>
-            <strong>Database Records</strong>
-          </div>
-          <Button variant="primary" size="sm" onClick={() => dispatch(fetchRecords({ page: 1, per_page: 10 }))}>
-            <i className="bi bi-arrow-clockwise me-1"></i>
-            Refresh
-          </Button>
-        </Card.Header>
-        <Card.Body>
-          <Row className="mb-3">
-            <Col md={6}>
-              <Form.Control
-                type="text"
-                placeholder="Search names..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                onKeyPress={(e) => {
-                  if (e.key === 'Enter') {
-                    setCurrentPage(1)
-                    dispatch(fetchRecords({ page: 1, per_page: 10, search: searchTerm }))
-                  }
-                }}
-              />
-            </Col>
-          </Row>
-
-          {loading ? (
-            <div className="text-center py-5">
-              <Spinner animation="border" />
+    <div className="mx-auto max-w-[1200px]">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4 mb-4">
+        <div className="rounded-lg border bg-card p-6 shadow-default border-stroke">
+          <div className="flex items-center gap-4">
+            <div className="h-12 w-12 rounded-full bg-indigo-50 flex items-center justify-center">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5z" fill="#6366F1"/></svg>
             </div>
-          ) : (
-            <>
-              <div className="table-responsive">
-                <Table striped bordered hover size="sm">
-                  <thead className="bg-dark text-white">
-                    <tr>
-                      <th>ID</th>
-                      <th>Name Surname</th>
-                      <th>Discipline</th>
-                      <th>Week/Month</th>
-                      <th>Company</th>
-                      <th>Projects</th>
-                      <th>Status</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {records.map((record) => (
-                      <tr key={record.id}>
-                        <td>{record.id}</td>
-                        <td>{record.personel || record['Name Surname'] || '-'}</td>
-                        <td>{record.Discipline || '-'}</td>
-                        <td>{record['(Week / Month)'] || '-'}</td>
-                        <td>{record.Company || '-'}</td>
-                        <td>{record['Projects/Group'] || '-'}</td>
-                        <td>
-                          <Badge bg="info">Reported</Badge>
-                        </td>
-                        <td>
-                          <Button size="sm" variant="info" className="me-1">
-                            <i className="bi bi-eye"></i>
-                          </Button>
-                          <Button 
-                            size="sm" 
-                            variant="danger"
-                            onClick={() => handleDelete(record.id)}
-                          >
-                            <i className="bi bi-trash"></i>
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </Table>
+            <div>
+              <div className="text-2xl font-bold">{pagination.total || 0}</div>
+              <div className="text-sm text-gray-500">Total Records</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-lg border bg-card p-6 shadow-default border-stroke">
+          <div className="flex items-center gap-4">
+            <div className="h-12 w-12 rounded-full bg-green-50 flex items-center justify-center">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 2a10 10 0 100 20 10 10 0 000-20z" fill="#10B981"/></svg>
+            </div>
+            <div>
+              <div className="text-2xl font-bold">Active</div>
+              <div className="text-sm text-gray-500">System Status</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-lg border bg-card p-6 shadow-default border-stroke">
+          <div className="flex items-center gap-4">
+            <div className="h-12 w-12 rounded-full bg-yellow-50 flex items-center justify-center">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 2l4 8-4 2-4-2 4-8z" fill="#F59E0B"/></svg>
+            </div>
+            <div>
+              <div className="text-2xl font-bold">Admin</div>
+              <div className="text-sm text-gray-500">Current Role</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-6 grid grid-cols-12 gap-6">
+        <div className="col-span-12 xl:col-span-5">
+          <div className="rounded-lg border bg-card shadow-default border-stroke">
+            <div className="border-b px-6 py-4">
+              <h3 className="text-lg font-medium">Upload Excel Database</h3>
+            </div>
+            <div className="p-6">
+              {uploadMessage && (
+                <div className={`mb-4 p-3 rounded ${uploadMessage.type === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                  {uploadMessage.text}
+                </div>
+              )}
+
+              <div className="mb-4">
+                <div className="relative rounded border-dashed border p-6 text-center">
+                  <input type="file" ref={fileInputRef} accept=".xlsb,.xlsx,.xls" onChange={handleFileChange} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                  <div className="flex flex-col items-center">
+                    <div className="mb-2 text-sm font-medium text-gray-700">Click to upload or drag and drop</div>
+                    <div className="text-xs text-gray-400">XLSB or XLSX</div>
+                  </div>
+                </div>
+                {uploadFile && <div className="mt-3 text-sm">Selected: <strong>{uploadFile.name}</strong></div>}
               </div>
 
-              <div className="d-flex justify-content-between align-items-center mt-3">
-                <div>
-                  <small>Showing page {currentPage} of {pagination.pages} ({pagination.total} total records)</small>
-                </div>
-                <div>
-                  <Button 
-                    size="sm"
-                    variant="outline-secondary"
-                    disabled={currentPage === 1}
-                    onClick={() => setCurrentPage(currentPage - 1)}
-                    className="me-2"
-                  >
-                    Previous
-                  </Button>
-                  <Button 
-                    size="sm"
-                    variant="outline-secondary"
-                    disabled={currentPage === pagination.pages}
-                    onClick={() => setCurrentPage(currentPage + 1)}
-                  >
-                    Next
-                  </Button>
+              <div className="flex justify-end gap-3">
+                <button className="rounded bg-red-600 px-4 py-2 text-white" onClick={handleClearDatabase}>Clear Database</button>
+                <button className="rounded bg-indigo-600 px-4 py-2 text-white" onClick={handleUpload} disabled={!uploadFile || uploading}>{uploading ? 'Processing...' : 'Upload & Process'}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="col-span-12 xl:col-span-7">
+          <div className="rounded-sm border bg-white shadow">
+            <div className="px-6 py-4 border-b">
+              <h4 className="text-lg font-semibold">Recent Records</h4>
+            </div>
+            <div className="p-4">
+              <div className="overflow-x-auto">
+                <div className="min-w-full">
+                  <div className="grid grid-cols-3 bg-gray-50 p-3 text-sm font-medium text-gray-700">
+                    <div>ID</div>
+                    <div className="text-center">Name</div>
+                    <div className="text-center">Project</div>
+                  </div>
+
+                  {loading && <div className="p-4 text-center">Loading...</div>}
+
+                  {!loading && safeRecords.length === 0 && <div className="p-4 text-center text-sm">No records found.</div>}
+
+                  {safeRecords.slice(0, 8).map((r, i) => (
+                    <div key={r.id || i} className={`grid grid-cols-3 p-3 items-center border-b ${i === safeRecords.length - 1 ? '' : ''}`}>
+                      <div>{r.id}</div>
+                      <div className="text-center">{r.personel || r['Name Surname'] || '-'}</div>
+                      <div className="text-center">{r['Projects/Group'] || '-'}</div>
+                    </div>
+                  ))}
                 </div>
               </div>
-            </>
-          )}
-        </Card.Body>
-      </Card>
-    </Container>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }
 
