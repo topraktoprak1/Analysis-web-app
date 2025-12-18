@@ -85,12 +85,13 @@ const dataSlice = createSlice({
       })
       .addCase(fetchRecords.fulfilled, (state, action) => {
         state.loading = false
-        state.records = action.payload.records
+        // Ensure records is always an array to avoid runtime errors in components
+        state.records = Array.isArray(action.payload?.records) ? action.payload.records : []
         state.pagination = {
-          page: action.payload.page,
-          per_page: action.payload.per_page,
-          total: action.payload.total,
-          pages: action.payload.pages
+          page: action.payload?.page || state.pagination.page,
+          per_page: action.payload?.per_page || state.pagination.per_page,
+          total: action.payload?.total || state.pagination.total,
+          pages: action.payload?.pages || state.pagination.pages,
         }
       })
       .addCase(fetchRecords.rejected, (state, action) => {

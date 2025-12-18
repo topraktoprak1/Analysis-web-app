@@ -1,5 +1,4 @@
 import { useState, useRef } from 'react'
-import { Container, Row, Col, Card, Form, Button, Alert, Collapse, Badge } from 'react-bootstrap'
 import { useSelector } from 'react-redux'
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts'
 import api from '../services/api'
@@ -13,7 +12,7 @@ function Graphs() {
     { id: 1, type: 'line', xAxis: '(Week / Month)', yAxis: 'KAR/ZARAR', colorBy: 'Discipline' },
     { id: 2, type: 'bar', xAxis: 'Discipline', yAxis: 'KAR/ZARAR', colorBy: '' }
   ])
-  
+
   const [sampleData] = useState([
     { name: 'Week 1', value: 400, total: 240 },
     { name: 'Week 2', value: 300, total: 139 },
@@ -28,7 +27,8 @@ function Graphs() {
 
   // Get available fields from the loaded records (same approach as TableAnalysis)
   const { records } = useSelector((state) => state.data)
-  const availableFields = records && records.length > 0 ? Object.keys(records[0]).filter(k => k !== 'created_at') : []
+  const safeRecords = Array.isArray(records) ? records : []
+  const availableFields = safeRecords.length > 0 ? Object.keys(safeRecords[0]).filter(k => k !== 'created_at') : []
 
   const findBestMatch = (label) => {
     if (!availableFields || availableFields.length === 0) return null
@@ -162,223 +162,130 @@ function Graphs() {
   }
 
   return (
-    <Container fluid className="py-3">
-      <Row className="mb-3">
-        <Col>
-          <h2>📈 Graph Analysis</h2>
-        </Col>
-      </Row>
-
-      {/* Data Filters */}
-      <Card className="mb-4 border-0 shadow-sm">
-        <Card.Header className="bg-light d-flex justify-content-between align-items-center">
-          <div>
-            <i className="bi bi-search me-2"></i>
-            <strong>Data Filters</strong>
-          </div>
-          <Button 
-            variant="primary"
-            size="sm"
-            onClick={() => setShowFilters(!showFilters)}
-          >
-            {showFilters ? 'Hide' : '🔽 Toggle'} Filters
-          </Button>
-        </Card.Header>
-        <Collapse in={showFilters}>
-          <Card.Body>
-            <Alert variant="info">
-              Apply filters to your data before generating charts. All selected filters will be applied to the charts below.
-            </Alert>
-            <Row>
-              <Col md={3}>
-                <Form.Group className="mb-2">
-                  <Form.Label className="small">Name Surname</Form.Label>
-                  <Form.Select size="sm">
-                    <option>All</option>
-                  </Form.Select>
-                </Form.Group>
-              </Col>
-              <Col md={3}>
-                <Form.Group className="mb-2">
-                  <Form.Label className="small">Discipline</Form.Label>
-                  <Form.Select size="sm">
-                    <option>All</option>
-                  </Form.Select>
-                </Form.Group>
-              </Col>
-              <Col md={3}>
-                <Form.Group className="mb-2">
-                  <Form.Label className="small">Week / Month</Form.Label>
-                  <Form.Select size="sm">
-                    <option>All</option>
-                  </Form.Select>
-                </Form.Group>
-              </Col>
-              <Col md={3}>
-                <Form.Group className="mb-2">
-                  <Form.Label className="small">Company</Form.Label>
-                  <Form.Select size="sm">
-                    <option>All</option>
-                  </Form.Select>
-                </Form.Group>
-              </Col>
-            </Row>
-          </Card.Body>
-        </Collapse>
-      </Card>
-
-      {/* Chart Configuration */}
-      <Card className="mb-4 border-0 shadow-sm">
-        <Card.Header className="bg-primary text-white">
-          <i className="bi bi-gear me-2"></i>
-          <strong>Chart Configuration</strong>
-        </Card.Header>
-        <Card.Body>
-          <Row className="mb-3">
-            <Col md={6}>
-              <Form.Group>
-                <Form.Label><strong>Number of Charts</strong></Form.Label>
-                <Form.Select 
-                  value={numCharts}
-                  onChange={(e) => setNumCharts(Number(e.target.value))}
-                >
-                  <option value={1}>1 Chart</option>
-                  <option value={2}>2 Charts</option>
-                  <option value={3}>3 Charts</option>
-                  <option value={4}>4 Charts</option>
-                </Form.Select>
-              </Form.Group>
-            </Col>
-            <Col md={6} className="d-flex align-items-end gap-2">
-                <Button variant="primary" className="flex-grow-1" onClick={generateAllCharts} disabled={chartLoading}>
-                  <i className="bi bi-bar-chart me-1"></i>
-                  {chartLoading ? 'Generating...' : 'Generate All Charts'}
-                </Button>
-              <Button variant="secondary">
-                <i className="bi bi-x-circle me-1"></i>
-                Clear All
-              </Button>
-            </Col>
-          </Row>
-
-          {chartError && (
-            <Alert variant="danger" className="mt-2">{chartError}</Alert>
-          )}
-
-          <div className="d-flex gap-2">
-            <Button variant="success">
-              <i className="bi bi-file-excel me-1"></i>
-              Export to Excel
-            </Button>
-            <Button variant="info">
-              <i className="bi bi-file-word me-1"></i>
-              Export to Word
-            </Button>
-          </div>
-        </Card.Body>
-      </Card>
-
-      {/* Charts Grid */}
-      <Row>
-        {charts.slice(0, numCharts).map((chart, index) => (
-          <Col md={numCharts === 1 ? 12 : 6} key={chart.id} className="mb-4">
-            <Card className="border-0 shadow-sm h-100">
-              <Card.Header className="bg-light">
-                <strong>Chart {index + 1}</strong>
-              </Card.Header>
-              <Card.Body>
-                <Row className="mb-3">
-                  <Col md={12}>
-                    <Form.Group className="mb-2">
-                      <Form.Label className="small"><strong>Select Visualization Type</strong></Form.Label>
-                      <Form.Select 
-                        size="sm"
-                        value={chart.type}
-                        onChange={(e) => handleChartChange(chart.id, 'type', e.target.value)}
-                      >
-                        <option value="line">Line Chart</option>
-                        <option value="bar">Bar Chart</option>
-                        <option value="pie">Pie Chart</option>
-                      </Form.Select>
-                    </Form.Group>
-                  </Col>
-                  <Col md={6}>
-                    <Form.Group className="mb-2">
-                      <Form.Label className="small"><strong>X-axis</strong></Form.Label>
-                      <Form.Select 
-                        size="sm"
-                        value={chart.xAxis}
-                        onChange={(e) => handleChartChange(chart.id, 'xAxis', e.target.value)}
-                      >
-                        <option value="">-- Select X axis --</option>
-                        {/* Prefer showing real available fields from dataset */}
-                        {availableFields.map((f, i) => (
-                          <option key={i} value={f}>{f}</option>
-                        ))}
-                      </Form.Select>
-                    </Form.Group>
-                  </Col>
-                  <Col md={6}>
-                    <Form.Group className="mb-2">
-                      <Form.Label className="small"><strong>Y-axis</strong></Form.Label>
-                      <Form.Select 
-                        size="sm"
-                        value={chart.yAxis}
-                        onChange={(e) => handleChartChange(chart.id, 'yAxis', e.target.value)}
-                      >
-                        <option value="">-- Select Y axis --</option>
-                        {availableFields.map((f, i) => (
-                          <option key={i} value={f}>{f}</option>
-                        ))}
-                      </Form.Select>
-                    </Form.Group>
-                  </Col>
-                  <Col md={12}>
-                    <Form.Group className="mb-2">
-                      <Form.Label className="small"><strong>Color by</strong></Form.Label>
-                      <Form.Select 
-                        size="sm"
-                        value={chart.colorBy}
-                        onChange={(e) => handleChartChange(chart.id, 'colorBy', e.target.value)}
-                      >
-                        <option value="">None</option>
-                        {availableFields.map((f, i) => (
-                          <option key={i} value={f}>{f}</option>
-                        ))}
-                      </Form.Select>
-                    </Form.Group>
-                  </Col>
-                </Row>
-
-                <div className="border rounded p-2 bg-light">
-                  <div id={`chart-${chart.id}`} style={{ width: '100%', height: 350 }} />
-                  {chartLoading && (
-                    <div className="text-center small text-muted mt-2">Updating chart...</div>
-                  )}
-                </div>
-              </Card.Body>
-            </Card>
-          </Col>
-        ))}
-      </Row>
-
-      {/* Saved Charts */}
-      <Card className="border-0 shadow-sm">
-        <Card.Header className="bg-light">
-          <i className="bi bi-bookmark me-2"></i>
-          <strong>Saved Charts</strong>
-        </Card.Header>
-        <Card.Body>
-          <Alert variant="secondary" className="mb-0">
-            No saved charts yet. Create and save charts to see them here.
-          </Alert>
-        </Card.Body>
-      </Card>
-
-      <div className="text-center mt-4 text-muted small">
-        Copyright © Veri Analizi 2025
+    <div className="mx-auto max-w-[1200px] py-6">
+      <div className="mb-3">
+        <h2 className="text-2xl font-semibold flex items-center gap-2"><i className="fa-solid fa-chart-line text-gray-500"></i> Graph Analysis</h2>
       </div>
-    </Container>
+
+      <div className="mb-4 rounded-lg border bg-card shadow-default">
+        <div className="flex items-center justify-between px-4 py-3 border-b">
+          <div className="font-semibold">Data Filters</div>
+          <button className="text-sm text-indigo-600" onClick={() => setShowFilters(!showFilters)}>{showFilters ? 'Hide' : 'Show'} Filters</button>
+        </div>
+        {showFilters && (
+          <div className="p-4">
+            <div className="mb-3 text-sm text-gray-600">Apply filters to your data before generating charts.</div>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <div>
+                <label className="text-xs text-gray-500">Name Surname</label>
+                <select className="mt-1 w-full rounded border px-2 py-1 text-sm">
+                  <option>All</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-gray-500">Discipline</label>
+                <select className="mt-1 w-full rounded border px-2 py-1 text-sm">
+                  <option>All</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-gray-500">Week / Month</label>
+                <select className="mt-1 w-full rounded border px-2 py-1 text-sm">
+                  <option>All</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-gray-500">Company</label>
+                <select className="mt-1 w-full rounded border px-2 py-1 text-sm">
+                  <option>All</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="mb-4 rounded-lg border bg-card shadow-default">
+        <div className="px-4 py-3 border-b flex items-center justify-between">
+          <div className="font-semibold">Chart Configuration</div>
+          <div className="flex items-center gap-2">
+            <button className="text-sm text-indigo-600" onClick={generateAllCharts} disabled={chartLoading}>{chartLoading ? 'Generating...' : 'Generate All Charts'}</button>
+            <button className="text-sm text-gray-600">Clear All</button>
+          </div>
+        </div>
+        <div className="p-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="text-sm font-medium">Number of Charts</label>
+              <select value={numCharts} onChange={(e) => setNumCharts(Number(e.target.value))} className="mt-1 w-32 rounded border px-2 py-1 text-sm">
+                <option value={1}>1 Chart</option>
+                <option value={2}>2 Charts</option>
+                <option value={3}>3 Charts</option>
+                <option value={4}>4 Charts</option>
+              </select>
+            </div>
+            <div className="flex items-end gap-2">
+              <button className="rounded bg-green-600 text-white px-3 py-1 text-sm">Export Excel</button>
+              <button className="rounded bg-blue-600 text-white px-3 py-1 text-sm">Export Word</button>
+            </div>
+          </div>
+          {chartError && <div className="text-sm text-red-600 mb-2">{chartError}</div>}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {charts.slice(0, numCharts).map((chart, index) => (
+          <div key={chart.id} className="rounded border bg-white shadow">
+            <div className="px-4 py-3 border-b font-semibold">Chart {index + 1}</div>
+            <div className="p-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="text-sm">Visualization Type</label>
+                  <select value={chart.type} onChange={(e) => handleChartChange(chart.id, 'type', e.target.value)} className="mt-1 w-full rounded border px-2 py-1 text-sm">
+                    <option value="line">Line Chart</option>
+                    <option value="bar">Bar Chart</option>
+                    <option value="pie">Pie Chart</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-sm">X-axis</label>
+                  <select value={chart.xAxis} onChange={(e) => handleChartChange(chart.id, 'xAxis', e.target.value)} className="mt-1 w-full rounded border px-2 py-1 text-sm">
+                    <option value="">-- Select X axis --</option>
+                    {availableFields.map((f, i) => (<option key={i} value={f}>{f}</option>))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-sm">Y-axis</label>
+                  <select value={chart.yAxis} onChange={(e) => handleChartChange(chart.id, 'yAxis', e.target.value)} className="mt-1 w-full rounded border px-2 py-1 text-sm">
+                    <option value="">-- Select Y axis --</option>
+                    {availableFields.map((f, i) => (<option key={i} value={f}>{f}</option>))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-sm">Color by</label>
+                  <select value={chart.colorBy} onChange={(e) => handleChartChange(chart.id, 'colorBy', e.target.value)} className="mt-1 w-full rounded border px-2 py-1 text-sm">
+                    <option value="">None</option>
+                    {availableFields.map((f, i) => (<option key={i} value={f}>{f}</option>))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="border rounded p-2 bg-gray-50">
+                <div id={`chart-${chart.id}`} style={{ width: '100%', height: 350 }} />
+                {chartLoading && <div className="text-center text-sm text-gray-500 mt-2">Updating chart...</div>}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-6 rounded border bg-white shadow p-4">
+        <div className="font-semibold mb-2">Saved Charts</div>
+        <div className="text-sm text-gray-600">No saved charts yet. Create and save charts to see them here.</div>
+      </div>
+
+      <div className="text-center mt-6 text-sm text-gray-500">Copyright © Veri Analizi 2025</div>
+    </div>
   )
 }
 

@@ -1,51 +1,116 @@
-import { NavLink } from 'react-router-dom'
-import { useSelector } from 'react-redux'
-import { Nav } from 'react-bootstrap'
-import './Sidebar.css'
+import React, { useState, useEffect } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
 
-function Sidebar() {
-  const { role, user } = useSelector((state) => state.auth)
+const Sidebar = ({ sidebarOpen, setSidebarOpen }) => {
+  const location = useLocation();
+  const { pathname } = location;
+  const trigger = React.useRef(null);
+  const sidebar = React.useRef(null);
+
+  // Close on click outside
+  useEffect(() => {
+    const clickHandler = ({ target }) => {
+      if (!sidebar.current || !trigger.current) return;
+      if (!sidebarOpen || sidebar.current.contains(target) || trigger.current.contains(target)) return;
+      setSidebarOpen(false);
+    };
+    document.addEventListener('click', clickHandler);
+    return () => document.removeEventListener('click', clickHandler);
+  });
 
   return (
-    <div className="sidebar-custom">
-      <div className="sidebar-header text-center py-4">
-        <i className="bi bi-database-fill" style={{ fontSize: '2rem' }}></i>
-        <h5 className="mt-2 mb-0">VERI ANALIZI</h5>
+    <aside
+      ref={sidebar}
+      className={`absolute left-0 top-0 z-50 flex h-screen flex-col overflow-y-hidden bg-gradient-to-b from-indigo-600 to-cyan-400 text-white duration-300 ease-linear lg:static lg:translate-x-0 ${
+        sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+      }`}
+      style={{ width: '260px' }}
+    >
+      {/* SIDEBAR HEADER */}
+      <div className="flex items-center justify-between gap-2 px-6 py-5.5 lg:py-6.5">
+        <NavLink to="/" className="flex items-center gap-3 text-white">
+          <div className="h-9 w-9 rounded-full bg-white/20 flex items-center justify-center font-bold">DA</div>
+          <div className="text-lg font-semibold">Data Analysis</div>
+        </NavLink>
+        <button
+          ref={trigger}
+          onClick={() => setSidebarOpen(!sidebarOpen)}
+          aria-controls="sidebar"
+          aria-expanded={sidebarOpen}
+          className="block lg:hidden"
+        >
+          <svg className="fill-current" width="20" height="18" viewBox="0 0 20 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M19 8.175H2.98748L9.36248 1.6875C9.69998 1.35 9.69998 0.825 9.36248 0.4875C9.02498 0.15 8.49998 0.15 8.16248 0.4875L0.399976 8.3625C0.0624756 8.7 0.0624756 9.225 0.399976 9.5625L8.16248 17.4375C8.31248 17.5875 8.53748 17.7 8.76248 17.7C8.98748 17.7 9.17498 17.625 9.36248 17.475C9.69998 17.1375 9.69998 16.6125 9.36248 16.275L3.02498 9.8625H19C19.45 9.8625 19.825 9.4875 19.825 9.0375C19.825 8.55 19.45 8.175 19 8.175Z" fill=""/>
+          </svg>
+        </button>
       </div>
-      
-      <Nav className="flex-column px-3">
-        <Nav.Link as={NavLink} to="/" end className="sidebar-link mb-2">
-          <i className="bi bi-house-door me-2"></i>
-          Database View
-        </Nav.Link>
-        <Nav.Link as={NavLink} to="/table" className="sidebar-link mb-2">
-          <i className="bi bi-table me-2"></i>
-          Pivot Analysis
-        </Nav.Link>
-        <Nav.Link as={NavLink} to="/graphs" className="sidebar-link mb-2">
-          <i className="bi bi-graph-up me-2"></i>
-          Graph Analysis
-        </Nav.Link>
-        {role === 'admin' && (
-          <Nav.Link as={NavLink} to="/admin" className="sidebar-link mb-2">
-            <i className="bi bi-shield-lock me-2"></i>
-            Admin Panel
-          </Nav.Link>
-        )}
-        <Nav.Link as={NavLink} to="/profile" className="sidebar-link mb-2">
-          <i className="bi bi-person-circle me-2"></i>
-          Profile
-        </Nav.Link>
-      </Nav>
 
-      <div className="sidebar-footer px-3 py-3 mt-auto">
-        <div className="text-center">
-          <i className="bi bi-person-circle" style={{ fontSize: '2rem' }}></i>
-          <div className="mt-2 small">{user || 'User'}</div>
-        </div>
+      <div className="no-scrollbar flex flex-col overflow-y-auto duration-300 ease-linear">
+        <nav className="mt-6 py-4 px-4">
+          <div className="px-3">
+            <h3 className="mb-4 ml-1 text-sm font-semibold text-white/90">VERI ANALIZI</h3>
+            <ul className="mb-6 flex flex-col gap-2">
+              <li>
+                <NavLink
+                  to="/"
+                  className={({ isActive }) =>
+                    `group flex items-center gap-3 rounded-lg py-3 px-4 text-sm font-medium duration-200 ${
+                      isActive ? 'bg-white/20 shadow' : 'hover:bg-white/10'
+                    }`
+                  }
+                >
+                  <span className="w-8 text-center">📊</span>
+                  <span>Database View</span>
+                </NavLink>
+              </li>
+
+              <li>
+                <NavLink
+                  to="/table"
+                  className={({ isActive }) =>
+                    `group flex items-center gap-3 rounded-lg py-3 px-4 text-sm font-medium duration-200 ${
+                      isActive ? 'bg-white/20 shadow' : 'hover:bg-white/10'
+                    }`
+                  }
+                >
+                  <span className="w-8 text-center">💾</span>
+                  <span>Pivot Analysis</span>
+                </NavLink>
+              </li>
+
+              <li>
+                <NavLink
+                  to="/graphs"
+                  className={({ isActive }) =>
+                    `group flex items-center gap-3 rounded-lg py-3 px-4 text-sm font-medium duration-200 ${
+                      isActive ? 'bg-white/20 shadow' : 'hover:bg-white/10'
+                    }`
+                  }
+                >
+                  <span className="w-8 text-center">📈</span>
+                  <span>Graph Analysis</span>
+                </NavLink>
+              </li>
+
+              <li>
+                <NavLink
+                  to="/admin"
+                  className={({ isActive }) =>
+                    `group flex items-center gap-3 rounded-lg py-3 px-4 text-sm font-medium duration-200 ${
+                      isActive ? 'bg-white/20 shadow' : 'hover:bg-white/10'
+                    }`
+                  }
+                >
+                  <span className="w-8 text-center">🔒</span>
+                  <span>Profile</span>
+                </NavLink>
+              </li>
+            </ul>
+          </div>
+        </nav>
       </div>
-    </div>
-  )
-}
+    </aside>
+  );
+};
 
-export default Sidebar
+export default Sidebar;

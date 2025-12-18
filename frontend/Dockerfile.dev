@@ -14,5 +14,6 @@ COPY . .
 # Expose port
 EXPOSE 3000
 
-# Start dev server
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+# Start dev server; install deps at container start to ensure devDependencies
+# are present when the host directory is mounted into /app.
+CMD ["sh", "-c", "npm install --silent && npm run dev -- --host 0.0.0.0"]
